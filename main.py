@@ -453,4 +453,230 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if found_service:
                 break
         
-        if found_ser:
+        if found_service:
+            user_states[user_id] = {"step": "waiting_link", "service": found_service}
+            s_name = found_service.get('name')
+            s_rate = found_service.get('client_rate')
+            min_q = found_service.get('min', 10)
+            max_q = found_service.get('max', 10000)
+            
+            text = (
+                f"📌 **الخدمة المختارة:**\n`{s_name}`\n\n"
+                f"💵 **السعر لكل 1000:** `{s_rate:.2f} جنيه`\n"
+                f"📥 **الحد الأدنى:** `{min_q}`\n"
+                f"📤 **الحد الأقصى:** `{max_q}`\n\n"
+                "🔗 **أرسل الآن رابط الطلب المطلوب (الرابط فقط):**"
+            )
+            keyboard = [[InlineKeyboardButton("🔙 إلغاء والرجوع", callback_data="show_categories")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text.strip() if update.message and update.message.text else ""
+
+    is_subscribed = await check_user_subscription(user_id, context)
+    if not is_subscribed:
+        return
+
+    if user_id not in user_balances:
+        user_balances[user_id] = 300.0 if user_id == ADMIN_ID else 0.0
+        save_balances()
+
+    if user_id in user_states:
+        state_data = user_states[user_id]
+        step = state_data.get("step")
+
+        if step == "admin_waiting_add":
+            try:
+                parts = text.split()
+                target_user = int(parts[0])
+                amount = float(parts[1])
+                
+                if target_user not in user_balances:
+                    user_balances[target_user] = 0.0
+                user_balances[target_user] += amount
+                save_balances()
+                
+                user_states.pop(user_id, None)
+                await update.message.reply_text(f"✅ تم إضافة `{amount}` بنجاح للمستخدم `{target_user}`.")
+                try:
+                    await context.bot.send_message(chat_id=target_user, text=f"🎉 **تم شحن رصيدك!**\nتمت إضافة `{amount}` جنيه إلى حسابك بواسطة الإدارة.", parse_mode="Markdown")
+                except:
+                    pass
+            except Exception as e:
+                await update.message.reply_text("❌ خطأ في تنسيق المدخلات. أرسل هكذا:\n`USER_ID AMOUNT`", parse_mode="Markdown")
+            return
+
+        elif step == "admin_waiting_sub":
+            try:
+                parts = text.split()
+                target_user = int(parts[0])
+                amount = float(parts[1])
+                
+                if target_user not in user_balances:
+                    user_balances[target_user] = 0.0
+                user_balances[target_user] = max(0.0, user_balances[target_user] - amount)
+                save_balances()
+                
+                user_states.pop(user_id, None)
+                await update.message.reply_text(f"✅ تم خصم `{amount}` بنجاح من المستخدم `{target_user}`.")
+            except Exception as e:
+                await update.message.reply_text("❌ خطأ في تنسيق المدخلات. أرسل هكذا:\n`USER_ID AMOUNT`", parse_mode="Markdown")
+            return
+
+        elif step == "deposit_waiting_amount":
+            try:
+                amount = float(text)
+                if amount <= 0:
+                    raise ValueError()
+                user_states[user_id] = {"step": "deposit_waiting_proof", "amount": amount}
+                
+                await update.message.reply_text(
+                    f"📥 **الخطوة 2/3:**\n"
+                    f"قم بتحويل مبلغ `{amount} جنيه` إلى رقم فودافون كاش التالي:\n`{VODAFONE_WALLET}`\n\n"
+                    "📸 **الخطوة 3/3:**\n"
+                    "بعد التحويل، **أرسل صورة إيصال التحويل (سكرين شوت)** هنا في الشات ليتم مراجعته وإضافة الرصيد.",
+                    parse_mode="Markdown"
+                )
+            except:
+                await update.message.reply_text("❌ يرجى إرسال مبلغ صحيح بالأرقام فقط (مثال: `50`)", parse_mode="Markdown")
+            return
+
+        elif step == "waiting_link":
+            srv = state_data.get("service")
+            user_states[user_id] = {"step": "waiting_qty", "service": srv, "link": text}
+            
+            min_q = srv.get("min", 10)
+            max_q = srv.get("max", 10000)
+            await update.message.reply_text(
+                f"🔗 **تم استلام الرابط بنجاح.**\n\n"
+                f"📊 أرسل الآن **الكمية** المطلوبة (يجب أن تكون بين `{min_q}` و `{max_q}`):",
+                parse_mode="Markdown"
+            )
+            return
+
+        elif step == "waiting_qty":
+            try:
+                qty = int(text)
+                srv = state_data.get("service")
+                link = state_data.get("link")
+                
+                min_q = int(srv.get("min", 10))
+                max_q = int(srv.get("max", 10000))
+                
+                if qty < min_q or qty > max_q:
+                    await update.message.reply_text(f"❌ الكمية غير صالحة. يجب أن تكون بين `{min_q}` و `{max_q}`:", parse_mode="Markdown")
+                    return
+                
+                client_rate = float(srv.get("client_rate", 0))
+                total_cost = (qty / 1000.0) * client_rate
+                
+                current_bal = user_balances.get(user_id, 0.0)
+                if current_bal < total_cost:
+                    user_states.pop(user_id, None)
+                    await update.message.reply_text(
+                        f"❌ **رصيدك غير كافٍ لإتمام الطلب!**\n\n"
+                        f"💰 رصيدك الحالي: `{current_bal:.2f} جنيه`\n"
+                        f"🏷 تكلفة الطلب: `{total_cost:.2f} جنيه`\n\n"
+                        "يرجى شحن رصيدك أولاً عبر خيار شحن الرصيد بالقائمة الرئيسية.",
+                        parse_mode="Markdown"
+                    )
+                    return
+                
+                payload = {
+                    "key": SMM_API_KEY,
+                    "action": "add",
+                    "service": srv.get("service"),
+                    "link": link,
+                    "quantity": qty
+                }
+                
+                res = requests.post(SMM_API_URL, data=payload, timeout=15).json()
+                
+                if "order" in res:
+                    order_id = res.get("order")
+                    user_balances[user_id] -= total_cost
+                    save_balances()
+                    
+                    if user_id not in user_orders:
+                        user_orders[user_id] = []
+                    user_orders[user_id].append({
+                        "order_id": order_id,
+                        "service_name": srv.get("name"),
+                        "qty": qty,
+                        "cost": total_cost
+                    })
+                    save_orders_data()
+                    
+                    user_states.pop(user_id, None)
+                    await update.message.reply_text(
+                        f"✅ **تم تقديم طلبك بنجاح!**\n\n"
+                        f"🆔 رقم الطلب: `{order_id}`\n"
+                        f"📌 الخدمة: {srv.get('name')}\n"
+                        f"📊 الكمية: `{qty}`\n"
+                        f"💰 التكلفة المخصومة: `{total_cost:.2f} جنيه`\n"
+                        f"💳 رصيدك المتبقي: `{user_balances[user_id]:.2f} جنيه`",
+                        parse_mode="Markdown"
+                    )
+                else:
+                    err_msg = res.get("error", "خطأ غير معروف من السيرفر")
+                    user_states.pop(user_id, None)
+                    await update.message.reply_text(f"❌ **فشل تنفيذ الطلب من المزود:**\n`{err_msg}`", parse_mode="Markdown")
+            except Exception as e:
+                await update.message.reply_text("❌ يرجى إرسال رقم صحيح للكمية بالأرقام فقط:", parse_mode="Markdown")
+            return
+
+    if text == "admin" or text == "/admin":
+        if user_id == ADMIN_ID:
+            await update.message.reply_text("🛠 **لوحة التحكم:**", reply_markup=InlineKeyboardMarkup(get_admin_menu_keyboard()), parse_mode="Markdown")
+
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    is_subscribed = await check_user_subscription(user_id, context)
+    if not is_subscribed:
+        return
+
+    if user_id in user_states and user_states[user_id].get("step") == "deposit_waiting_proof":
+        amount = user_states[user_id].get("amount")
+        user_states.pop(user_id, None)
+        
+        photo_file = await update.message.photo[-1].get_file()
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ موافقة وإضافة الرصيد", callback_data=f"approve_{user_id}_{amount}")],
+            [InlineKeyboardButton("❌ رفض الإيصال", callback_data=f"reject_{user_id}_{amount}")]
+        ]
+        
+        caption = (
+            f"📥 **طلب شحن جديد بانتظار الموافقة!**\n\n"
+            f"👤 صاحب الطلب: `{user_id}`\n"
+            f"💰 المبلغ المطلوب إضافته: `{amount} جنيه`"
+        )
+        
+        try:
+            await context.bot.send_photo(
+                chat_id=ADMIN_ID,
+                photo=photo_file.file_id,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+            await update.message.reply_text("✅ **تم إرسال إيصال الشحن إلى الإدارة بنجاح!**\nسيتم مراجعته وإضافة الرصيد في أقرب وقت ممكن ❤️", parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text("❌ حدث خطأ أثناء إرسال الإيصال للإدارة، يرجى المحاولة لاحقاً.", parse_mode="Markdown")
+
+def main():
+    load_services()
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+
+    print("🤖 البوت يعمل الآن...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
