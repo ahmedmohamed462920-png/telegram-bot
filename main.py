@@ -5,7 +5,7 @@ import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-# --- الإعدادات ---
+# --- الإعدادات الأساسية للبوت ---
 TOKEN = "8942289190:AAFaylYUr3ySiUUCntptfXdTz8TcFCM7JRs"
 ADMIN_ID = 8697852304
 CHANNEL_ID = -1003931541362
@@ -18,11 +18,14 @@ WALLET_NAME = "AHMED"
 
 BALANCES_FILE = "user_balances.json"
 ORDERS_FILE = "user_orders.json"
+REFERRALS_FILE = "user_referrals.json"
+FAVS_FILE = "user_favorites.json"
 
 logging.basicConfig(level=logging.INFO)
 cached_categories = {}
 free_services = {} 
 user_states = {}    
+category_mapping = {}
 
 def load_json_file(filename, default_val):
     if os.path.exists(filename):
@@ -42,6 +45,8 @@ def save_json_file(filename, data):
 
 user_balances = {int(k): float(v) for k, v in load_json_file(BALANCES_FILE, {}).items()}
 user_orders = {int(k): v for k, v in load_json_file(ORDERS_FILE, {}).items()}
+referrals_data = {int(k): v for k, v in load_json_file(REFERRALS_FILE, {}).items()}
+user_favorites = {int(k): v for k, v in load_json_file(FAVS_FILE, {}).items()}
 
 def save_balances():
     save_json_file(BALANCES_FILE, user_balances)
@@ -49,12 +54,18 @@ def save_balances():
 def save_orders_data():
     save_json_file(ORDERS_FILE, user_orders)
 
+def save_referrals_data():
+    save_json_file(REFERRALS_FILE, referrals_data)
+
+def save_favorites_data():
+    save_json_file(FAVS_FILE, user_favorites)
+
 def check_site_balance():
     try:
         response = requests.post(SMM_API_URL, data={"key": SMM_API_KEY, "action": "balance"}, timeout=10)
         if response.status_code == 200:
             res_data = response.json()
-            balance = float(res_data.get("balance", 0.0))
+            balance = float(res_data.get("balance", res_data.get("cash", 0.0)))
             return balance
     except Exception as e:
         print(f"خطأ أثناء التحقق من رصيد الموقع: {e}")
@@ -75,13 +86,15 @@ def get_service_sort_priority(service_name):
     return 5
 
 def load_services():
-    global cached_categories, free_services
+    global cached_categories, free_services, category_mapping
     try:
         response = requests.post(SMM_API_URL, data={"key": SMM_API_KEY, "action": "services"}, timeout=15)
         if response.status_code == 200:
             services_list = response.json()
             temp = {}
             temp_free = []
+            category_mapping.clear()
+            cat_index = 0
             
             for s in services_list:
                 cat = s.get("category", "خدمات أخرى").strip()
@@ -98,6 +111,8 @@ def load_services():
 
                 if cat not in temp: 
                     temp[cat] = []
+                    cat_index += 1
+                    category_mapping[str(cat_index)] = cat
                 
                 base_price = original_rate * 50  
                 s["api_rate"] = base_price          
@@ -116,8 +131,11 @@ def load_services():
 def get_main_menu_keyboard():
     return [
         [InlineKeyboardButton("🚀 خدمات رشق السوشيال ميديا", callback_data="show_categories")],
+        [InlineKeyboardButton("🔍 بحث سريع عن خدمة", callback_data="search_service_prompt")],
+        [InlineKeyboardButton("⭐ خدماتي المفضلة", callback_data="my_favorites")],
         [InlineKeyboardButton("🎁 الرشق اليومي المجاني", callback_data="free_section")],
         [InlineKeyboardButton("📦 طلباتي السابقة وحالتها", callback_data="my_orders")],
+        [InlineKeyboardButton("👥 دعوة أصدقاء (اربح رصيد)", callback_data="referral_program")],
         [InlineKeyboardButton("💳 شحن الرصيد (فودافون كاش)", callback_data="vodafone_info")],
         [InlineKeyboardButton("👤 حسابي", callback_data="my_account")],
         [InlineKeyboardButton("💬 تواصل مع الدعم", url=f"https://t.me/{SUPPORT_USERNAME}")]
@@ -140,14 +158,96 @@ async def check_user_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
         print(f"خطأ في التحقق من الاشتراك: {e}")
     return False
 
+async def update_user_orders_status(user_id, context, update_obj=None):
+    if user_id not in user_orders or not user_orders[user_id]:
+        return
+    
+    recent_orders = user_orders[user_id]
+    
+    client_name = "مستخدم تيليجرام"
+    if update_obj and update_obj.effective_user:
+        if update_obj.effective_user.first_name:
+            client_name = update_obj.effective_user.first_name
+    else:
+        try:
+            chat_user = await context.bot.get_chat(user_id)
+            if chat_user.first_name:
+                client_name = chat_user.first_name
+        except:
+            pass
+
+    for o in recent_orders:
+        old_status = str(o.get("status", "")).strip().lower()
+        if old_status in ["completed", "complete", "success", "canceled", "partial"]:
+            continue
+            
+        o_id = str(o["order_id"])
+        try:
+            payload = {
+                "key": SMM_API_KEY,
+                "action": "status",
+                "order": o_id
+            }
+            res = requests.post(SMM_API_URL, data=payload, timeout=10).json()
+            
+            if isinstance(res, dict):
+                site_status = str(res.get("status", "")).strip().lower()
+                if not site_status:
+                    site_status = str(res.get("order_status", "")).strip().lower()
+                
+                if site_status in ["completed", "complete", "success"]:
+                    o["status"] = "Completed"
+                    save_orders_data()
+                    
+                    success_msg = (
+                        f"✅ اكتمل طلبك بنجاح!\n"
+                        f"🔢 رقم الطلب: {o_id}\n"
+                        f"📦 الخدمة: {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
+                        f"📊 الكمية: {o.get('qty')}\n"
+                        f"🔗 الرابط: {o.get('link')}"
+                    )
+                    try:
+                        await context.bot.send_message(chat_id=user_id, text=success_msg, parse_mode="Markdown")
+                    except:
+                        pass
+
+                    channel_proof_msg = (
+                        f"⭐ **تم التسليم بنجاح** ⭐\n\n"
+                        f"👑 **اسم العميل:** `{client_name}`\n"
+                        f"💎 **الخدمة:** {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
+                        f"🔥 **العدد:** {o.get('qty')}\n"
+                        f"💸 **المبلغ:** {o.get('total_cost', 0)} جنيه\n"
+                        f"🛡 **الحالة:** تم التسليم ✅\n\n"
+                        f"🎁 **شكراً لثقتك بنا – L.G ❤️**"
+                    )
+                    try:
+                        await context.bot.send_message(chat_id=CHANNEL_ID, text=channel_proof_msg, parse_mode="Markdown")
+                    except Exception as channel_err:
+                        print(f"خطأ في إرسال الإثبات للقناة: {channel_err}")
+                elif site_status:
+                    o["status"] = site_status.capitalize()
+                    save_orders_data()
+        except Exception as e:
+            print(f"خطأ في فحص حالة الطلب {o_id}: {e}")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    site_balance = check_site_balance()
-    if site_balance <= 0 and user_id != ADMIN_ID:
-        maintenance_text = "⚠️ **البوت متوقف حالياً للصيانة أو تحديث الخدمات.**\n\nيرجى المحاولة في وقت لاحق وشكراً لتفهمكم ❤️"
-        if update.message:
-            await update.message.reply_text(maintenance_text, parse_mode="Markdown")
-        return
+    
+    args = context.args
+    if args and args[0].startswith("ref_"):
+        try:
+            inviter_id = int(args[0].replace("ref_", ""))
+            if inviter_id != user_id and user_id not in referrals_data:
+                referrals_data[user_id] = {"referred_by": inviter_id, "rewarded": False}
+                if inviter_id in referrals_data:
+                    if "count" not in referrals_data[inviter_id]:
+                        referrals_data[inviter_id]["count"] = 0
+                    referrals_data[inviter_id]["count"] += 1
+                else:
+                    referrals_data[inviter_id] = {"count": 1}
+                save_referrals_data()
+        except Exception as e:
+            print(f"خطأ في معالجة رابط الإحالة: {e}")
 
     is_subscribed = await check_user_subscription(user_id, context)
     if not is_subscribed:
@@ -191,7 +291,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user_id not in user_balances:
                 user_balances[user_id] = 300.0 if user_id == ADMIN_ID else 0.0
                 save_balances()
-            await query.edit_message_text("✅ تم التحقق بنجاح!\n\nمرحباً بك في متجر الخدمات:", reply_markup=InlineKeyboardMarkup(get_main_menu_keyboard()))
+            try:
+                await query.edit_message_text("✅ تم التحقق بنجاح!\n\nمرحباً بك في متجر الخدمات:", reply_markup=InlineKeyboardMarkup(get_main_menu_keyboard()))
+            except:
+                pass
         else:
             await query.answer("❌ لم تقم بالاشتراك في القناة بعد!", show_alert=True)
         return
@@ -202,481 +305,465 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📢 اشترك في قناة الإثباتات", url=f"https://t.me/{CHANNEL_USERNAME}")],
             [InlineKeyboardButton("✅ اشتركت، تحقق من الاشتراكات", callback_data="check_sub")]
         ]
-        await query.edit_message_text("⚠️ يجب الاشتراك في القناة أولاً لاستخدام البوت.", reply_markup=InlineKeyboardMarkup(keyboard))
+        try:
+            await query.edit_message_text("⚠️ يجب الاشتراك في القناة أولاً لاستخدام البوت.", reply_markup=InlineKeyboardMarkup(keyboard))
+        except:
+            pass
         return
 
     if user_id not in user_balances:
         user_balances[user_id] = 300.0 if user_id == ADMIN_ID else 0.0
         save_balances()
 
-    if data == "admin_panel":
-        if user_id != ADMIN_ID:
-            await query.answer("غير مسموح لك!", show_alert=True)
-            return
-        user_states.pop(user_id, None)
-        await query.edit_message_text(
-            "🛠 **لوحة تحكم الأدمن:**\n\nاختر العملية المطلوبة 👇",
-            reply_markup=InlineKeyboardMarkup(get_admin_menu_keyboard()),
-            parse_mode="Markdown"
-        )
-
-    elif data == "admin_add_balance":
-        if user_id != ADMIN_ID: return
-        user_states[user_id] = {"step": "admin_waiting_add"}
-        keyboard = [[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]]
-        await query.edit_message_text(
-            "➕ **إضافة رصيد لمستخدم**\n\nأرسل الآن الآيدي ثم المبلغ مفصولين بمسافة:\n`USER_ID AMOUNT`\nمثال: `6738288541 50`",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-
-    elif data == "admin_sub_balance":
-        if user_id != ADMIN_ID: return
-        user_states[user_id] = {"step": "admin_waiting_sub"}
-        keyboard = [[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]]
-        await query.edit_message_text(
-            "➖ **خصم رصيد من مستخدم**\n\nأرسل الآن الآيدي ثم المبلغ مفصولين بمسافة:\n`USER_ID AMOUNT`\nمثال: `6738288541 20`",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-
-    elif data == "admin_stats":
-        if user_id != ADMIN_ID: return
-        site_balance = check_site_balance()
-        total_users = len(user_balances)
-        keyboard = [[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]]
-        await query.edit_message_text(
-            f"📊 **إحصائيات البوت:**\n\n👥 عدد المستخدمين: `{total_users}`\n💰 رصيد الموقع الحالي: `{site_balance}`",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-
-    elif data == "show_categories":
-        user_states.pop(user_id, None)
-        if not cached_categories: 
-            load_services()
-        
-        platforms = ["تيك توك", "فيسبوك", "انستقرام", "سناب شات", "يوتيوب", "تلجرام", "واتساب"]
-        keyboard = []
-        for p in platforms:
-            matched = [c for c in cached_categories if p in c]
-            if matched:
-                keyboard.append([InlineKeyboardButton(f"📱 خدمات {p}", callback_data=f"plat_{p}_0")])
-        
-        keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")])
-        await query.edit_message_text("🔥 **اختر المنصة المطلوبة:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-    elif data == "free_section":
-        user_states.pop(user_id, None)
-        if not free_services:
-            load_services()
-            
-        keyboard = []
-        for i, s in enumerate(free_services[:10], 1):
-            s_name = s['name']
-            btn_label = f"🎁 {i}. " + (s_name if len(s_name) < 30 else s_name[:30] + "...")
-            keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"srv_{s.get('service')}")])
-            
-        keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")])
-        
-        desc_text = "🎁 **قسم الرشق اليومي المجاني:**\n\n👇 اختر الخدمة المجانية المتاحة حالياً للطلب الفوري:"
-        await query.edit_message_text(desc_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-    elif data == "main_menu":
-        user_states.pop(user_id, None)
-        await query.edit_message_text("✨ **القائمة الرئيسية:**", reply_markup=InlineKeyboardMarkup(get_main_menu_keyboard()), parse_mode="Markdown")
-
-    elif data == "my_orders":
-        user_states.pop(user_id, None)
-        user_list_orders = user_orders.get(user_id, [])
-        
-        if not user_list_orders:
-            keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]]
-            await query.edit_message_text("📦 **سجل طلباتك:**\n\nعذراً، ليس لديك أي طلبات سابقة مسجلة حتى الآن.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-            return
-
-        recent_orders = user_list_orders[-5:]
-        orders_text = "📦 **آخر طلباتك وحالتها الحالية:**\n"
-        
-        try:
-            payload = {
-                "key": SMM_API_KEY,
-                "action": "multi_status",
-                "orders": ",".join([str(o["order_id"]) for o in recent_orders])
-            }
-            res = requests.post(SMM_API_URL, data=payload, timeout=10).json()
-            
-            for o in recent_orders:
-                o_id = str(o["order_id"])
-                status_info = res.get(o_id, {})
-                status_text = status_info.get("status", "قيد المعالجة / جاري التحقق")
-                
-                status_map = {
-                    "Completed": "مكتملة ✅",
-                    "Pending": "قيد الانتظار ⏳",
-                    "Processing": "قيد التنفيذ 🔄",
-                    "In progress": "قيد التنفيذ 🔄",
-                    "Partial": "ملغي جزئياً ⚠️",
-                    "Canceled": "ملغاة ❌"
-                }
-                translated_status = status_map.get(status_text, status_text)
-                
-                orders_text += f"\n🆔 رقم الطلب: `{o_id}`\n📌 الخدمة: {o['service_name']}\n📊 الكمية: {o['qty']}\n⚡ الحالة: **{translated_status}**\n------------------"
-        except Exception as e:
-            print(f"خطأ في جلب حالات الطلبات: {e}")
-            for o in recent_orders:
-                orders_text += f"\n🆔 رقم الطلب: `{o['order_id']}`\n📌 الخدمة: {o['service_name']}\n------------------"
-
-        keyboard = [[InlineKeyboardButton("🔄 تحديث القائمة", callback_data="my_orders")],
-                    [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]]
-        
-        await query.edit_message_text(orders_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-    elif data == "vodafone_info":
-        user_states[user_id] = {"step": "deposit_waiting_amount"}
-        text = (
-            f"💳 **خطوات شحن الرصيد عبر فودافون كاش:**\n\n"
-            f"رقم المحفظة: `{VODAFONE_WALLET}`\n"
-            f"اسم الحساب: {WALLET_NAME}\n\n"
-            "📥 **الخطوة 1/3:**\nأرسل الآن **المبلغ المرسل** بالأرقام (مثال: `50`):"
-        )
-        keyboard = [[InlineKeyboardButton("🔙 إلغاء والرجوع", callback_data="main_menu")]]
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-    elif data == "my_account":
-        balance = user_balances.get(user_id, 0.0)
-        text = f"👤 **معلومات حسابك:**\n\n🆔 الآيدي: `{user_id}`\n💰 رصيدك الحالي: **{balance:.2f} جنيه**"
-        keyboard = [[InlineKeyboardButton("📦 سجل طلباتي", callback_data="my_orders")],
-                    [InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]]
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-    elif data.startswith("approve_"):
-        if user_id != ADMIN_ID: return
-        parts = data.split("_")
-        target_user = int(parts[1])
-        amount = float(parts[2])
-
-        if target_user not in user_balances:
-            user_balances[target_user] = 0.0
-        user_balances[target_user] += amount
-        save_balances()
-
-        try:
-            await context.bot.send_message(
-                chat_id=target_user,
-                text=f"✅ **تم قبول عملية الشحن بنجاح!**\n\nتمت إضافة `{amount}` جنيه إلى رصيدك. شكراً لاستخدامك خدماتنا 🎉",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
-
-        await query.edit_message_caption(caption=query.message.caption + "\n\n**[✅ تم قبول الطلب وإضافة الرصيد]**", reply_markup=None)
-
-    elif data.startswith("reject_"):
-        if user_id != ADMIN_ID: return
-        parts = data.split("_")
-        target_user = int(parts[1])
-
-        try:
-            await context.bot.send_message(
-                chat_id=target_user,
-                text="❌ **عذراً، تم رفض إيصال الشحن من قبل الإدارة.**\nيرجى التأكد من البيانات وإعادة المحاولة أو التواصل مع الدعم.",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
-
-        await query.edit_message_caption(caption=query.message.caption + "\n\n**[❌ تم رفض الطلب]**", reply_markup=None)
-
-    elif data.startswith("plat_"):
-        parts = data.split("_")
-        plat = parts[1]
-        page = int(parts[2]) if len(parts) > 2 else 0
-        
-        matched_cats = [c for c in cached_categories if plat in c]
-        per_page = 6
-        total_pages = (len(matched_cats) + per_page - 1) // per_page
-        
-        start_idx = page * per_page
-        end_idx = start_idx + per_page
-        current_cats = matched_cats[start_idx:end_idx]
-        
-        keyboard = []
-        for cat in current_cats:
-            short_btn_name = cat.replace("تيك توك", "").replace("فيسبوك", "").replace("انستقرام", "").replace("سناب شات", "").strip()
-            if not short_btn_name:
-                short_btn_name = cat
-            keyboard.append([InlineKeyboardButton(f"📂 {short_btn_name}", callback_data=f"cat_{cat[:20]}")])
-        
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"plat_{plat}_{page-1}"))
-        if page < total_pages - 1:
-            nav_buttons.append(InlineKeyboardButton("التالي ➡️", callback_data=f"plat_{plat}_{page+1}"))
-        if nav_buttons:
-            keyboard.append(nav_buttons)
-            
-        keyboard.append([InlineKeyboardButton("🔙 رجوع للمنصات", callback_data="show_categories")])
-        
-        page_info = f" (صفحة {page+1} من {total_pages})" if total_pages > 1 else ""
-        await query.edit_message_text(f"📋 **أقسام {plat}{page_info}:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-    elif data.startswith("cat_"):
-        short = data.replace("cat_", "")
-        cat_name = next((c for c in cached_categories if c[:20] == short), None)
-        if cat_name:
-            keyboard = []
-            for i, s in enumerate(cached_categories[cat_name][:10], 1):
-                btn_label = f"{i}. {s['name']}"
-                if len(btn_label) > 35:
-                    btn_label = btn_label[:32] + "..."
-                keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"srv_{s.get('service')}")] )
-        else:
-            keyboard = []
-        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="show_categories")])
-        
-        desc_text = f"📂 **قسم: {cat_name}**\n\n👇 **اختر الخدمة المناسبة من الأزرار أدناه:**\n"
-        if cat_name and cached_categories[cat_name]:
-            for i, s in enumerate(cached_categories[cat_name][:10], 1):
-                desc_text += f"\n`{i}.` {s['name']}"
-                
-        await query.edit_message_text(desc_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-    elif data.startswith("srv_"):
-        srv_id = data.replace("srv_", "")
-        found_service = None
-        for cat in cached_categories:
-            for s in cached_categories[cat]:
-                if str(s.get('service')) == srv_id:
-                    found_service = s
-                    break
-            if found_service:
-                break
-        
-        if found_service:
-            user_states[user_id] = {"step": "waiting_link", "service": found_service}
-            s_name = found_service.get('name')
-            s_rate = found_service.get('client_rate')
-            min_q = found_service.get('min', 10)
-            max_q = found_service.get('max', 10000)
-            
-            text = (
-                f"📌 **الخدمة المختارة:**\n`{s_name}`\n\n"
-                f"💵 **السعر لكل 1000:** `{s_rate:.2f} جنيه`\n"
-                f"📥 **الحد الأدنى:** `{min_q}`\n"
-                f"📤 **الحد الأقصى:** `{max_q}`\n\n"
-                "🔗 **أرسل الآن رابط الطلب المطلوب (الرابط فقط):**"
-            )
-            keyboard = [[InlineKeyboardButton("🔙 إلغاء والرجوع", callback_data="show_categories")]]
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text.strip() if update.message and update.message.text else ""
-
-    is_subscribed = await check_user_subscription(user_id, context)
-    if not is_subscribed:
-        return
-
-    if user_id not in user_balances:
-        user_balances[user_id] = 300.0 if user_id == ADMIN_ID else 0.0
-        save_balances()
-
-    if user_id in user_states:
-        state_data = user_states[user_id]
-        step = state_data.get("step")
-
-        if step == "admin_waiting_add":
-            try:
-                parts = text.split()
-                target_user = int(parts[0])
-                amount = float(parts[1])
-                
-                if target_user not in user_balances:
-                    user_balances[target_user] = 0.0
-                user_balances[target_user] += amount
-                save_balances()
-                
-                user_states.pop(user_id, None)
-                await update.message.reply_text(f"✅ تم إضافة `{amount}` بنجاح للمستخدم `{target_user}`.")
-                try:
-                    await context.bot.send_message(chat_id=target_user, text=f"🎉 **تم شحن رصيدك!**\nتمت إضافة `{amount}` جنيه إلى حسابك بواسطة الإدارة.", parse_mode="Markdown")
-                except:
-                    pass
-            except Exception as e:
-                await update.message.reply_text("❌ خطأ في تنسيق المدخلات. أرسل هكذا:\n`USER_ID AMOUNT`", parse_mode="Markdown")
-            return
-
-        elif step == "admin_waiting_sub":
-            try:
-                parts = text.split()
-                target_user = int(parts[0])
-                amount = float(parts[1])
-                
-                if target_user not in user_balances:
-                    user_balances[target_user] = 0.0
-                user_balances[target_user] = max(0.0, user_balances[target_user] - amount)
-                save_balances()
-                
-                user_states.pop(user_id, None)
-                await update.message.reply_text(f"✅ تم خصم `{amount}` بنجاح من المستخدم `{target_user}`.")
-            except Exception as e:
-                await update.message.reply_text("❌ خطأ في تنسيق المدخلات. أرسل هكذا:\n`USER_ID AMOUNT`", parse_mode="Markdown")
-            return
-
-        elif step == "deposit_waiting_amount":
-            try:
-                amount = float(text)
-                if amount <= 0:
-                    raise ValueError()
-                user_states[user_id] = {"step": "deposit_waiting_proof", "amount": amount}
-                
-                await update.message.reply_text(
-                    f"📥 **الخطوة 2/3:**\n"
-                    f"قم بتحويل مبلغ `{amount} جنيه` إلى رقم فودافون كاش التالي:\n`{VODAFONE_WALLET}`\n\n"
-                    "📸 **الخطوة 3/3:**\n"
-                    "بعد التحويل، **أرسل صورة إيصال التحويل (سكرين شوت)** هنا في الشات ليتم مراجعته وإضافة الرصيد.",
-                    parse_mode="Markdown"
-                )
-            except:
-                await update.message.reply_text("❌ يرجى إرسال مبلغ صحيح بالأرقام فقط (مثال: `50`)", parse_mode="Markdown")
-            return
-
-        elif step == "waiting_link":
-            srv = state_data.get("service")
-            user_states[user_id] = {"step": "waiting_qty", "service": srv, "link": text}
-            
-            min_q = srv.get("min", 10)
-            max_q = srv.get("max", 10000)
-            await update.message.reply_text(
-                f"🔗 **تم استلام الرابط بنجاح.**\n\n"
-                f"📊 أرسل الآن **الكمية** المطلوبة (يجب أن تكون بين `{min_q}` و `{max_q}`):",
-                parse_mode="Markdown"
-            )
-            return
-
-        elif step == "waiting_qty":
-            try:
-                qty = int(text)
-                srv = state_data.get("service")
-                link = state_data.get("link")
-                
-                min_q = int(srv.get("min", 10))
-                max_q = int(srv.get("max", 10000))
-                
-                if qty < min_q or qty > max_q:
-                    await update.message.reply_text(f"❌ الكمية غير صالحة. يجب أن تكون بين `{min_q}` و `{max_q}`:", parse_mode="Markdown")
-                    return
-                
-                client_rate = float(srv.get("client_rate", 0))
-                total_cost = (qty / 1000.0) * client_rate
-                
-                current_bal = user_balances.get(user_id, 0.0)
-                if current_bal < total_cost:
-                    user_states.pop(user_id, None)
-                    await update.message.reply_text(
-                        f"❌ **رصيدك غير كافٍ لإتمام الطلب!**\n\n"
-                        f"💰 رصيدك الحالي: `{current_bal:.2f} جنيه`\n"
-                        f"🏷 تكلفة الطلب: `{total_cost:.2f} جنيه`\n\n"
-                        "يرجى شحن رصيدك أولاً عبر خيار شحن الرصيد بالقائمة الرئيسية.",
-                        parse_mode="Markdown"
-                    )
-                    return
-                
-                payload = {
-                    "key": SMM_API_KEY,
-                    "action": "add",
-                    "service": srv.get("service"),
-                    "link": link,
-                    "quantity": qty
-                }
-                
-                res = requests.post(SMM_API_URL, data=payload, timeout=15).json()
-                
-                if "order" in res:
-                    order_id = res.get("order")
-                    user_balances[user_id] -= total_cost
-                    save_balances()
-                    
-                    if user_id not in user_orders:
-                        user_orders[user_id] = []
-                    user_orders[user_id].append({
-                        "order_id": order_id,
-                        "service_name": srv.get("name"),
-                        "qty": qty,
-                        "cost": total_cost
-                    })
-                    save_orders_data()
-                    
-                    user_states.pop(user_id, None)
-                    await update.message.reply_text(
-                        f"✅ **تم تقديم طلبك بنجاح!**\n\n"
-                        f"🆔 رقم الطلب: `{order_id}`\n"
-                        f"📌 الخدمة: {srv.get('name')}\n"
-                        f"📊 الكمية: `{qty}`\n"
-                        f"💰 التكلفة المخصومة: `{total_cost:.2f} جنيه`\n"
-                        f"💳 رصيدك المتبقي: `{user_balances[user_id]:.2f} جنيه`",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    err_msg = res.get("error", "خطأ غير معروف من السيرفر")
-                    user_states.pop(user_id, None)
-                    await update.message.reply_text(f"❌ **فشل تنفيذ الطلب من المزود:**\n`{err_msg}`", parse_mode="Markdown")
-            except Exception as e:
-                await update.message.reply_text("❌ يرجى إرسال رقم صحيح للكمية بالأرقام فقط:", parse_mode="Markdown")
-            return
-
-    if text == "admin" or text == "/admin":
-        if user_id == ADMIN_ID:
-            await update.message.reply_text("🛠 **لوحة التحكم:**", reply_markup=InlineKeyboardMarkup(get_admin_menu_keyboard()), parse_mode="Markdown")
-
-async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    is_subscribed = await check_user_subscription(user_id, context)
-    if not is_subscribed:
-        return
-
-    if user_id in user_states and user_states[user_id].get("step") == "deposit_waiting_proof":
-        amount = user_states[user_id].get("amount")
-        user_states.pop(user_id, None)
-        
-        photo_file = await update.message.photo[-1].get_file()
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ موافقة وإضافة الرصيد", callback_data=f"approve_{user_id}_{amount}")],
-            [InlineKeyboardButton("❌ رفض الإيصال", callback_data=f"reject_{user_id}_{amount}")]
-        ]
-        
-        caption = (
-            f"📥 **طلب شحن جديد بانتظار الموافقة!**\n\n"
-            f"👤 صاحب الطلب: `{user_id}`\n"
-            f"💰 المبلغ المطلوب إضافته: `{amount} جنيه`"
-        )
-        
-        try:
-            await context.bot.send_photo(
-                chat_id=ADMIN_ID,
-                photo=photo_file.file_id,
-                caption=caption,
+    try:
+        if data == "search_service_prompt":
+            user_states[user_id] = {"step": "waiting_search_query"}
+            keyboard = [[InlineKeyboardButton("🔙 إلغاء والرجوع", callback_data="main_menu")]]
+            await query.edit_message_text(
+                "🔍 **البحث السريع عن الخدمات:**\n\nأرسل الآن كلمة مفتاحية للبحث (مثلاً: `تيك توك`، `لايكات`، `انستقرام`):",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
             )
-            await update.message.reply_text("✅ **تم إرسال إيصال الشحن إلى الإدارة بنجاح!**\nسيتم مراجعته وإضافة الرصيد في أقرب وقت ممكن ❤️", parse_mode="Markdown")
+
+        elif data == "my_account":
+            user_states.pop(user_id, None)
+            bal = user_balances.get(user_id, 0.0)
+            text = (
+                f"👤 **معلومات حسابك:**\n\n"
+                f"🆔 الآيدي الخاص بك: `{user_id}`\n"
+                f"💰 رصيدك الحالي: `{bal:.2f}` جنيه\n\n"
+                f"يمكنك شحن رصيدك عبر فودافون كاش ومراسلة الدعم لتأكيد الشحن."
+            )
+            keyboard = [[InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data == "vodafone_info":
+            user_states.pop(user_id, None)
+            text = (
+                f"💳 **شحن الرصيد عبر فودافون كاش:**\n\n"
+                f"قم بتحويل المبلغ المطلوب إلى رقم المحفظة التالي:\n"
+                f"📞 رقم المحفظة: `{VODAFONE_WALLET}`\n"
+                f"👤 اسم صاحب المحفظة: `{WALLET_NAME}`\n\n"
+                f"📸 بعد إتمام التحويل، قم بإرسال **صورة إيصال التحويل** أو **رقم العملية** مباشرة إلى الدعم الفني ليتم إضافة الرصيد لحسابك فوراً 👇"
+            )
+            keyboard = [
+                [InlineKeyboardButton("💬 تواصل مع الدعم لإتمام الشحن", url=f"https://t.me/{SUPPORT_USERNAME}")],
+                [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data == "my_favorites":
+            user_states.pop(user_id, None)
+            favs = user_favorites.get(user_id, [])
+            if not favs:
+                keyboard = [[InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]]
+                await query.edit_message_text(
+                    "⭐ **قائمة خدماتي المفضلة:**\n\nليس لديك أي خدمات مضافة للمفضلة حالياً.",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="Markdown"
+                )
+                return
+
+            keyboard = []
+            for s_id in favs:
+                found_name = f"خدمة رقم {s_id}"
+                for cat in cached_categories:
+                    for s in cached_categories[cat]:
+                        if str(s.get('service')) == str(s_id):
+                            found_name = s.get('name')
+                            break
+                btn_label = found_name if len(found_name) < 30 else found_name[:30] + "..."
+                keyboard.append([InlineKeyboardButton(f"⭐ {btn_label}", callback_data=f"srv_{s_id}")])
+
+            keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")])
+            await query.edit_message_text("⭐ **خدماتك المفضلة:**\n\nاختر الخدمة للطلب الفوري:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data == "admin_panel":
+            if user_id != ADMIN_ID:
+                await query.answer("غير مسموح لك!", show_alert=True)
+                return
+            user_states.pop(user_id, None)
+            await query.edit_message_text(
+                "🛠 **لوحة تحكم الأدمن:**\n\nاختر العملية المطلوبة 👇",
+                reply_markup=InlineKeyboardMarkup(get_admin_menu_keyboard()),
+                parse_mode="Markdown"
+            )
+
+        elif data == "admin_add_balance":
+            if user_id != ADMIN_ID: return
+            user_states[user_id] = {"step": "admin_waiting_add"}
+            keyboard = [[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]]
+            await query.edit_message_text(
+                "➕ **إضافة رصيد لمستخدم**\n\nأرسل الآن الآيدي ثم المبلغ مفصولين بمسافة:\n`USER_ID AMOUNT`\nمثال: `6738288541 50`",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+
+        elif data == "admin_sub_balance":
+            if user_id != ADMIN_ID: return
+            user_states[user_id] = {"step": "admin_waiting_sub"}
+            keyboard = [[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]]
+            await query.edit_message_text(
+                "➖ **خصم رصيد من مستخدم**\n\nأرسل الآن الآيدي ثم المبلغ مفصولين بمسافة:\n`USER_ID AMOUNT`\nمثال: `6738288541 20`",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+
+        elif data == "admin_stats":
+            if user_id != ADMIN_ID: return
+            site_balance = check_site_balance()
+            total_users = len(user_balances)
+            keyboard = [[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]]
+            await query.edit_message_text(
+                f"📊 **إحصائيات البوت:**\n\n👥 عدد المستخدمين: `{total_users}`\n💰 رصيد الموقع الحالي: `{site_balance}` دولار",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+
+        elif data == "show_categories":
+            user_states.pop(user_id, None)
+            if not cached_categories: 
+                load_services()
+            
+            platforms = ["تيك توك", "فيسبوك", "انستقرام", "سناب شات", "يوتيوب", "تلجرام", "واتساب"]
+            keyboard = []
+            for p in platforms:
+                matched = [c for c in cached_categories if p in c]
+                if matched:
+                    keyboard.append([InlineKeyboardButton(f"📱 خدمات {p}", callback_data=f"plat_{p}")])
+            
+            keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")])
+            await query.edit_message_text("🔥 **اختر المنصة المطلوبة:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data.startswith("plat_"):
+            plat_name = data.replace("plat_", "")
+            if not cached_categories:
+                load_services()
+                
+            keyboard = []
+            for cat_id, cat_name in category_mapping.items():
+                if plat_name in cat_name:
+                    btn_text = cat_name if len(cat_name) < 35 else cat_name[:35] + "..."
+                    keyboard.append([InlineKeyboardButton(f"📁 {btn_text}", callback_data=f"cat_{cat_id}")])
+                    
+            keyboard.append([InlineKeyboardButton("🔙 رجوع للمنصات", callback_data="show_categories")])
+            await query.edit_message_text(f"📂 **الأقسام المتاحة لخدمات {plat_name}:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data.startswith("cat_"):
+            cat_id = data.replace("cat_", "")
+            cat_name = category_mapping.get(cat_id, "")
+            services_in_cat = cached_categories.get(cat_name, [])
+            
+            keyboard = []
+            for s in services_in_cat[:15]:
+                s_id = s.get("service")
+                s_name = s.get("name")
+                btn_label = s_name if len(s_name) < 30 else s_name[:30] + "..."
+                keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"srv_{s_id}")])
+                
+            keyboard.append([InlineKeyboardButton("🔙 رجوع للمنصات", callback_data="show_categories")])
+            await query.edit_message_text(f"📌 **الخدمات في القسم:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data.startswith("srv_"):
+            srv_id = data.replace("srv_", "")
+            selected_service = None
+            for cat in cached_categories:
+                for s in cached_categories[cat]:
+                    if str(s.get("service")) == str(srv_id):
+                        selected_service = s
+                        break
+                if selected_service:
+                    break
+                    
+            if not selected_service:
+                await query.answer("❌ عذراً، هذه الخدمة غير متوفرة حالياً.", show_alert=True)
+                return
+                
+            user_states[user_id] = {"step": "waiting_order_link", "service": selected_service}
+            
+            text = (
+                f"🛒 **تفاصيل الخدمة المختارة:**\n\n"
+                f"📌 **اسم الخدمة:** {selected_service.get('name')}\n"
+                f"🔢 **رقم الخدمة:** `{selected_service.get('service')}`\n"
+                f"💰 **السعر لكل 1000:** `{selected_service.get('client_rate')}` جنيه\n"
+                f"📊 **الحد الأدنى:** {selected_service.get('min')}\n"
+                f"📈 **الحد الأقصى:** {selected_service.get('max')}\n\n"
+                f"🔗 **أرسل الآن الرابط المطلوب لتنفيذ الطلب:**"
+            )
+            keyboard = [[InlineKeyboardButton("🔙 إلغاء", callback_data="main_menu")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data == "free_section":
+            user_states.pop(user_id, None)
+            if not free_services:
+                load_services()
+                
+            keyboard = []
+            for i, s in enumerate(free_services[:10], 1):
+                s_name = s['name']
+                btn_label = f"🎁 {i}. " + (s_name if len(s_name) < 30 else s_name[:30] + "...")
+                keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"srv_{s.get('service')}")])
+                
+            keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")])
+            await query.edit_message_text("🎁 **قسم الرشق اليومي المجاني:**\n\n👇 اختر الخدمة المتاحة للطلب الفوري:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data == "referral_program":
+            user_states.pop(user_id, None)
+            bot_username = (await context.bot.get_me()).username
+            ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+            
+            my_invites = 0
+            if user_id in referrals_data and "count" in referrals_data[user_id]:
+                my_invites = referrals_data[user_id]["count"]
+
+            text = (
+                f"👥 **نظام دعوة الأصدقاء:**\n\n"
+                f"شارك رابط الدعوة الخاص بك مع أصدقائك، واربح **10%** هدية من قيمة **أول شحنة** يقوم بها كل صديق تدعوه!\n\n"
+                f"📊 عدد الأشخاص الذين دعيتهم: `{my_invites}` شخص\n\n"
+                f"🔗 **رابط الدعوة الخاص بك:**\n`{ref_link}`\n\n"
+                "*(اضغط على الرابط لنسخه وانشره في المجموعات!)*"
+            )
+            keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+        elif data == "main_menu":
+            user_states.pop(user_id, None)
+            await query.edit_message_text("✨ **القائمة الرئيسية:**", reply_markup=InlineKeyboardMarkup(get_main_menu_keyboard()), parse_mode="Markdown")
+
+        elif data == "my_orders":
+            user_states.pop(user_id, None)
+            await update_user_orders_status(user_id, context, update)
+            
+            user_list_orders = user_orders.get(user_id, [])
+            if not user_list_orders:
+                keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]]
+                await query.edit_message_text(
+                    "📦 **سجل طلباتك:**\n\nعذراً، ليس لديك أي طلبات سابقة مسجلة حتى الآن.", 
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="Markdown"
+                )
+                return
+
+            status_translations = {
+                "pending": "⏳ قيد الانتظار",
+                "in progress": "🔄 قيد التنفيذ",
+                "processing": "⚙️ قيد المعالجة",
+                "completed": "✅ مكتمل",
+                "complete": "✅ مكتمل",
+                "success": "✅ مكتمل",
+                "partial": "⚠️ جزئي",
+                "canceled": "❌ ملغى",
+                "cancelled": "❌ ملغى"
+            }
+
+            orders_text = "📦 **سجل طلباتك الأخيرة وحالتها:**\n\n"
+            
+            for o in user_list_orders[-5:]:
+                raw_status = str(o.get("status", "pending")).strip().lower()
+                formatted_status = status_translations.get(raw_status, f"📌 {o.get('status', 'غير معروف')}")
+                
+                orders_text += (
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"🔢 **رقم الطلب:** `{o.get('order_id')}`\n"
+                    f"🏷 **الخدمة:** {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
+                    f"📊 **الكمية:** {o.get('qty')}\n"
+                    f"📌 **الحالة:** {formatted_status}\n"
+                )
+
+            keyboard = [
+                [InlineKeyboardButton("🔄 تحديث الحالات", callback_data="my_orders")],
+                [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
+            ]
+            
+            await query.edit_message_text(
+                orders_text, 
+                reply_markup=InlineKeyboardMarkup(keyboard), 
+                parse_mode="Markdown"
+            )
+    except Exception as err:
+        if "Message is not modified" in str(err):
+            pass
+        else:
+            print(f"خطأ في أزرار التحكم: {err}")
+
+# --- معالجة الرسائل والنصوص المدخلة من المستخدمين ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not update.message or not update.message.text:
+        return
+        
+    text = update.message.text.strip()
+    
+    if user_id not in user_states:
+        return
+        
+    state = user_states[user_id]
+    step = state.get("step")
+    
+    if step == "waiting_search_query":
+        user_states.pop(user_id, None)
+        if not cached_categories:
+            load_services()
+            
+        found_services = []
+        query_lower = text.lower()
+        for cat in cached_categories:
+            for s in cached_categories[cat]:
+                if query_lower in s.get("name", "").lower():
+                    found_services.append(s)
+                    
+        if not found_services:
+            keyboard = [[InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]]
+            await update.message.reply_text(f"❌ لم يتم العثور على أي خدمة مطابقة لكلمة: `{text}`", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            return
+            
+        keyboard = []
+        for s in found_services[:12]:
+            s_id = s.get("service")
+            s_name = s.get("name")
+            btn_label = s_name if len(s_name) < 30 else s_name[:30] + "..."
+            keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"srv_{s_id}")])
+            
+        keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")])
+        await update.message.reply_text(f"🔍 **نتائج البحث عن ({text}):**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif step == "waiting_order_link":
+        selected_service = state.get("service")
+        user_states[user_id] = {"step": "waiting_order_qty", "service": selected_service, "link": text}
+        
+        await update.message.reply_text(
+            f"📊 **أدخل الكمية المطلوبة:**\n\n"
+            f"الحد الأدنى: `{selected_service.get('min')}`\n"
+            f"الحد الأقصى: `{selected_service.get('max')}`",
+            parse_mode="Markdown"
+        )
+
+    elif step == "waiting_order_qty":
+        try:
+            qty = int(text)
+        except ValueError:
+            await update.message.reply_text("❌ يرجى إدخال رقم صحيح للكمية:")
+            return
+            
+        selected_service = state.get("service")
+        link = state.get("link")
+        
+        min_q = int(selected_service.get("min", 1))
+        max_q = int(selected_service.get("max", 1000000))
+        
+        if qty < min_q or qty > max_q:
+            await update.message.reply_text(f"❌ الكمية خارج النطاق المسموح به!\nيجب أن تكون بين `{min_q}` و `{max_q}`:", parse_mode="Markdown")
+            return
+            
+        rate = float(selected_service.get("client_rate", 0))
+        total_cost = round((qty / 1000.0) * rate, 2)
+        
+        user_bal = user_balances.get(user_id, 0.0)
+        if user_bal < total_cost:
+            user_states.pop(user_id, None)
+            await update.message.reply_text(
+                f"❌ **رصيدك غير كافٍ لإتمام هذا الطلب!**\n\n"
+                f"💰 رصيدك الحالي: `{user_bal:.2f}` جنيه\n"
+                f"🏷 تكلفة الطلب: `{total_cost:.2f}` جنيه\n\n"
+                f"قم بشحن رصيدك عبر فودافون كاش أولاً.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 شحن الرصيد", callback_data="vodafone_info")], [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]]),
+                parse_mode="Markdown"
+            )
+            return
+            
+        try:
+            payload = {
+                "key": SMM_API_KEY,
+                "action": "add",
+                "service": selected_service.get("service"),
+                "link": link,
+                "quantity": qty
+            }
+            res = requests.post(SMM_API_URL, data=payload, timeout=15).json()
+            
+            if isinstance(res, dict) and "order" in res:
+                order_id = res["order"]
+                user_balances[user_id] -= total_cost
+                save_balances()
+                
+                order_info = {
+                    "order_id": order_id,
+                    "service_name": selected_service.get("name"),
+                    "qty": qty,
+                    "link": link,
+                    "total_cost": total_cost,
+                    "status": "Pending"
+                }
+                
+                if user_id not in user_orders:
+                    user_orders[user_id] = []
+                user_orders[user_id].append(order_info)
+                save_orders_data()
+                
+                user_states.pop(user_id, None)
+                await update.message.reply_text(
+                    f"✅ **تم إرسال طلبك بنجاح!**\n\n"
+                    f"🔢 رقم الطلب: `{order_id}`\n"
+                    f"📦 الخدمة: {selected_service.get('name')}\n"
+                    f"📊 الكمية: {qty}\n"
+                    f"💰 التكلفة المخصومة: `{total_cost:.2f}` جنيه\n"
+                    f"💳 رصيدك المتبقي: `{user_balances[user_id]:.2f}` جنيه",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]]),
+                    parse_mode="Markdown"
+                )
+            else:
+                err_str = res.get("error", "خطأ غير معروف من السيرفر") if isinstance(res, dict) else "استجابة غير صالحة من السيرفر"
+                user_states.pop(user_id, None)
+                await update.message.reply_text(f"❌ حدث خطأ أثناء إتمام الطلب:\n`{err_str}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]]), parse_mode="Markdown")
         except Exception as e:
-            await update.message.reply_text("❌ حدث خطأ أثناء إرسال الإيصال للإدارة، يرجى المحاولة لاحقاً.", parse_mode="Markdown")
+            user_states.pop(user_id, None)
+            await update.message.reply_text(f"❌ خطأ في الاتصال بسيرفر الخدمات: {e}")
 
-def main():
-    load_services()
-    app = ApplicationBuilder().token(TOKEN).build()
+    elif step == "admin_waiting_add" and user_id == ADMIN_ID:
+        user_states.pop(user_id, None)
+        try:
+            parts = text.split()
+            target_id = int(parts[0])
+            amount = float(parts[1])
+            
+            if target_id not in user_balances:
+                user_balances[target_id] = 0.0
+            user_balances[target_id] += amount
+            save_balances()
+            
+            await update.message.reply_text(f"✅ تمت إضافة `{amount}` جنيه بنجاح للمستخدم `{target_id}`.", parse_mode="Markdown")
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"🎉 **تمت إضافة رصيد لحسابك!**\n\n💰 المبلغ المضاف: `{amount}` جنيه", parse_mode="Markdown")
+            except:
+                pass
+        except Exception as e:
+            await update.message.reply_text(f"❌ صيغة غير صحيحة. استخدم: `ID AMOUNT`\nالخطأ: {e}")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
-    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    elif step == "admin_waiting_sub" and user_id == ADMIN_ID:
+        user_states.pop(user_id, None)
+        try:
+            parts = text.split()
+            target_id = int(parts[0])
+            amount = float(parts[1])
+            
+            if target_id not in user_balances:
+                user_balances[target_id] = 0.0
+            user_balances[target_id] = max(0.0, user_balances[target_id] - amount)
+            save_balances()
+            
+            await update.message.reply_text(f"✅ تم خصم `{amount}` جنيه بنجاح من المستخدم `{target_id}`.", parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text(f"❌ صيغة غير صحيحة. استخدم: `ID AMOUNT`\nالخطأ: {e}")
 
-    print("🤖 البوت يعمل الآن...")
-    app.run_polling()
-
+# --- تشغيل البوت بشكل دائم ---
 if __name__ == "__main__":
-    main()
+    application = ApplicationBuilder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    print("🤖 البوت يعمل الآن بنجاح...")
+    load_services()
+    application.run_polling()
