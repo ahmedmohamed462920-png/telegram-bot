@@ -5,7 +5,7 @@ import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-TOKEN = "8993779570:AAGWGSOSjbN82X5BsntkkuYsXiJdrDpPWXA"
+TOKEN = "8942289190:AAFaylYUr3ySiUUCntptfXdTz8TcFCM7JRs"
 ADMIN_ID = 8697852304
 CHANNEL_ID = -1003931541362
 CHANNEL_USERNAME = "Jsoxkedoaoejf"
