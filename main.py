@@ -142,6 +142,10 @@ def format_price(user_id, price_in_base):
     curr_code = user_currencies_data.get(str(user_id), "EGP")
     curr_info = CURRENCIES.get(curr_code, CURRENCIES["EGP"])
     converted_price = float(price_in_base) * curr_info["rate"]
+    
+    # تعديل عرض الأسعار الصغيرة جداً لتظهر بدقة ولا تظهر كصفر 0.00
+    if 0 < converted_price < 0.01:
+        return f"{converted_price:.4f} {curr_info['symbol']}"
     return f"{converted_price:.2f} {curr_info['symbol']}"
 
 def check_site_balance():
@@ -476,7 +480,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for code, info in CURRENCIES.items():
             keyboard.append([InlineKeyboardButton(info["name"], callback_data=f"set_curr_{code}")])
         
-        # إضافة أزرار تغيير اللغة داخل قائمة العملات حسب الطلب
         keyboard.append([
             InlineKeyboardButton("🇸🇦 العربية", callback_data="set_lang_ar"),
             InlineKeyboardButton("🇺🇸 English", callback_data="set_lang_en")
@@ -511,7 +514,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         return
 
-    # ميزة إعادة الطلب السريع (Quick Reorder) - تم إضافة الترقيم (1 و 2) بالترتيب فوق بعض
     if data.startswith("reorder_"):
         try:
             target_order_id = data.replace("reorder_", "")
@@ -586,7 +588,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "service_name": selected_service.get("name"),
                     "qty": qty,
                     "link": link,
-                    "total_cost": round(total_cost, 2),
+                    "total_cost": round(total_cost, 4),
                     "status": "Pending"
                 })
                 save_orders_data()
@@ -1209,7 +1211,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "service_name": selected_service.get("name"), 
                         "qty": qty, 
                         "link": link,
-                        "total_cost": round(total_cost, 2),
+                        "total_cost": round(total_cost, 4),
                         "status": "Pending"
                     })
                     save_orders_data()
@@ -1257,7 +1259,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO & ~filters.COMMAND, handle_message))
     
-    print("البوت يعمل الآن مع ميزة تغيير اللغة داخل زر العملات ودون المساس بالباقي...")
+    print("البوت يعمل الآن...")
     app.run_polling()
 
 if __name__ == "__main__":
