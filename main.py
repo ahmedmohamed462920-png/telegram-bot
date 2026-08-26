@@ -1,6 +1,8 @@
 import json
 import os
 import logging
+import time
+import random
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -23,6 +25,7 @@ REFERRALS_FILE = "user_referrals.json"
 FAVS_FILE = "user_favorites.json"
 USER_CURRENCIES_FILE = "user_currencies.json"
 USER_LANGS_FILE = "user_langs.json"
+DAILY_GIFT_FILE = "user_daily_gifts.json"
 
 CURRENCIES = {
     "EGP": {"name": "جنيه مصري 🇪🇬", "rate": 1.0, "symbol": "ج.م"},
@@ -40,6 +43,7 @@ LANGS = {
         "btn_favs": "⭐ خدماتي المفضلة",
         "btn_orders": "📦 طلباتي السابقة وحالتها",
         "btn_payment": "💳 طرق وشحن الرصيد",
+        "btn_daily_gift": "🎁 الهدية اليومية والمفاجآت",
         "btn_account": "👤 حسابي",
         "btn_currency": "💱 تغيير العملة واللغة",
         "btn_support": "💬 تواصل مع الدعم",
@@ -65,14 +69,15 @@ LANGS = {
         "btn_favs": "⭐ My Favorites",
         "btn_orders": "📦 My Orders & Status",
         "btn_payment": "💳 Balance & Payment Methods",
+        "btn_daily_gift": "🎁 Daily Gift & Surprises",
         "btn_account": "👤 My Account",
         "btn_currency": "💱 Currency & Language",
         "btn_support": "💬 Contact Support",
         "sub_title": "Social Media Services",
         "exit": "🚪 Exit",
         "back": "🔙 Back",
-        "main_menu_btn": "🏠 Main Menu",
-        "back_step": "⬅️ Back Step",
+        "main_menu_btn": "Main Menu",
+        "back_step": "Back Step",
         "sub_check": "⚠️ Sorry, you must subscribe to the bot channel first to use the services.\n\nSubscribe and then click the check button below 👇",
         "sub_btn_channel": "📢 Subscribe to Channel",
         "sub_btn_check": "✅ I Subscribed, Check",
@@ -81,13 +86,13 @@ LANGS = {
         "lang_section": "🌐 Change Bot Language:",
         "lang_ar": "Arabic 🇸🇦",
         "lang_en": "English 🇺🇸",
-        "choose_lang_done": "✅ Language successfully changed to English."
+        "choose_lang_done": "🎁 Language successfully changed to English."
     }
 }
 
 logging.basicConfig(level=logging.INFO)
 cached_subcategories = {} 
-free_services = [] 
+daily_gift_items = [] 
 user_states = {}    
 
 def load_json_file(filename, default_val):
@@ -112,6 +117,7 @@ referrals_data = {int(k): v for k, v in load_json_file(REFERRALS_FILE, {}).items
 user_favorites = {int(k): v for k, v in load_json_file(FAVS_FILE, {}).items()}
 user_currencies_data = load_json_file(USER_CURRENCIES_FILE, {})
 user_langs_data = load_json_file(USER_LANGS_FILE, {})
+user_daily_gifts = {int(k): float(v) for k, v in load_json_file(DAILY_GIFT_FILE, {}).items()}
 
 def save_balances():
     save_json_file(BALANCES_FILE, user_balances)
@@ -131,6 +137,9 @@ def save_user_currencies():
 def save_user_langs():
     save_json_file(USER_LANGS_FILE, user_langs_data)
 
+def save_daily_gifts():
+    save_json_file(DAILY_GIFT_FILE, user_daily_gifts)
+
 def get_user_lang(user_id):
     return user_langs_data.get(str(user_id), "ar")
 
@@ -143,21 +152,9 @@ def format_price(user_id, price_in_base):
     curr_info = CURRENCIES.get(curr_code, CURRENCIES["EGP"])
     converted_price = float(price_in_base) * curr_info["rate"]
     
-    # تعديل عرض الأسعار الصغيرة جداً لتظهر بدقة ولا تظهر كصفر 0.00
     if 0 < converted_price < 0.01:
         return f"{converted_price:.4f} {curr_info['symbol']}"
     return f"{converted_price:.2f} {curr_info['symbol']}"
-
-def check_site_balance():
-    try:
-        response = requests.post(SMM_API_URL, data={"key": SMM_API_KEY, "action": "balance"}, timeout=10)
-        if response.status_code == 200:
-            res_data = response.json()
-            balance = float(res_data.get("balance", res_data.get("cash", 0.0)))
-            return balance
-    except Exception as e:
-        print(f"خطأ أثناء التحقق من رصيد الموقع: {e}")
-    return 0.0 
 
 def detect_service_platform(s_name, cat_name):
     text_s = s_name.lower()
@@ -167,9 +164,9 @@ def detect_service_platform(s_name, cat_name):
     if any(tool in text_s or tool in text_c for tool in digital_tools):
         return "أخرى"
 
-    if any(k in text_s for k in ["facebook", "فيسبوك", "فيس", "fb", "meta", "بروفايل فيس", "صفحة فيس"]):
+    if any(k in text_s for k in ["facebook", "فيسبوك", "فيس", "fb", "meta"]):
         return "فيسبوك"
-    if any(k in text_s for k in ["instagram", "انستقرام", "انستجرام", "انستا", "ig", "قناة انستجرام"]):
+    if any(k in text_s for k in ["instagram", "انستقرام", "انستجرام", "انستا", "ig"]):
         return "انستجرام"
     if any(k in text_s for k in ["tiktok", "تيك توك", "تيكتوك", "تك توك", "tt"]):
         return "تيك توك"
@@ -199,6 +196,12 @@ def detect_service_platform(s_name, cat_name):
         
     return "عام"
 
+def is_arabic_text(text):
+    for ch in text:
+        if '\u0600' <= ch <= '\u06FF':
+            return True
+    return False
+
 def classify_service_type(s_name, cat_name, platform=""):
     text = s_name.lower()
     cat_text = cat_name.lower()
@@ -226,8 +229,7 @@ def classify_service_type(s_name, cat_name, platform=""):
 
     reaction_keywords = [
         "تعابير", "heart", "love", "reactions", "reaction", "تفاعل", "تفاعلات", 
-        "ردود فعل", "إيموجي", "emoji", "رياكت", "رياكتات", "لاف", "ضحك", "واو", 
-        "كير", "احضان", "حزين", "غاضب", "رعاك", "دعم"
+        "ردود فعل", "إيموجي", "emoji", "رياكت", "رياكتات", "لاف", "ضحك", "واو"
     ]
     
     if platform == "واتساب":
@@ -254,27 +256,20 @@ def classify_service_type(s_name, cat_name, platform=""):
     return "خدمات أخري"
 
 def load_services():
-    global cached_subcategories, free_services
+    global cached_subcategories, daily_gift_items
     try:
         response = requests.post(SMM_API_URL, data={"key": SMM_API_KEY, "action": "services"}, timeout=15)
         if response.status_code == 200:
             services_list = response.json()
             
-            platforms = ["مجانية", "فيسبوك", "انستجرام", "واتساب", "يوتيوب", "تيك توك", "تليجرام", "سناب شات"]
+            platforms = ["فيسبوك", "انستجرام", "واتساب", "يوتيوب", "تيك توك", "تليجرام", "سناب شات"]
             temp_sub = {}
-            temp_free = []
-            
-            sub_keys_standard = [
-                "متابعين ومشتركين", "اللايكات", "التفاعلات", "الاستطلاع", 
-                "مشاهدات", "تعليقات", "الإبلاغات", "أعضاء المجموعات", 
-                "خدمات أخري", "خدمات متنوعة"
-            ]
-
             for p in platforms:
                 temp_sub[p] = {}
-                for sk in sub_keys_standard:
+                for sk in ["متابعين ومشتركين", "اللايكات", "التفاعلات", "الاستطلاع", "مشاهدات", "تعليقات", "الإبلاغات", "أعضاء المجموعات", "خدمات أخري"]:
                     temp_sub[p][sk] = []
             
+            platform_pools = {p: [] for p in platforms}
             for s in services_list:
                 cat = s.get("category", "")
                 s_name = s.get("name", "")
@@ -286,24 +281,36 @@ def load_services():
 
                 base_price = original_rate * 50  
                 s["api_rate"] = base_price          
-                s["client_rate"] = base_price * 1.5   
+                s["client_rate"] = base_price  
 
-                if "مجاني" in cat.lower() or "free" in cat.lower() or "مجاني" in s_name.lower() or "free" in s_name.lower() or original_rate == 0:
-                    temp_free.append(s)
-                    temp_sub["مجانية"]["خدمات متنوعة"].append(s)
-                
                 real_platform = detect_service_platform(s_name, cat)
+                if real_platform == "أخرى" or real_platform == "عام":
+                    continue
+
                 p_type = classify_service_type(s_name, cat, platform=real_platform)
-                
-                if real_platform in temp_sub and p_type and p_type in temp_sub[real_platform]:
+                if real_platform in temp_sub and p_type:
                     temp_sub[real_platform][p_type].append(s)
+
+                if 0.1 <= base_price <= 1.5 and is_arabic_text(s_name):
+                    if real_platform in platform_pools:
+                        platform_pools[real_platform].append(s)
             
             cleaned_sub = {}
             for p in temp_sub:
                 cleaned_sub[p] = {sub_k: items for sub_k, items in temp_sub[p].items() if len(items) > 0}
-            
             cached_subcategories = cleaned_sub
-            free_services = temp_free
+
+            available_platforms = [p for p in platforms if len(platform_pools[p]) > 0]
+            random.shuffle(available_platforms)
+            
+            selected_gifts = []
+            for p in available_platforms[:2]:
+                if platform_pools[p]:
+                    chosen_s = random.choice(platform_pools[p])
+                    selected_gifts.append((chosen_s, p))
+            
+            daily_gift_items = selected_gifts
+
     except Exception as e:
         print(f"خطأ في تحميل الخدمات: {e}")
 
@@ -314,6 +321,7 @@ def get_main_menu_keyboard(user_id=None):
         [InlineKeyboardButton(get_trans(user_id, "btn_favs"), callback_data="my_favorites")],
         [InlineKeyboardButton(get_trans(user_id, "btn_orders"), callback_data="my_orders")],
         [InlineKeyboardButton(get_trans(user_id, "btn_payment"), callback_data="payment_methods")],
+        [InlineKeyboardButton(get_trans(user_id, "btn_daily_gift"), callback_data="daily_gift")],
         [InlineKeyboardButton(get_trans(user_id, "btn_account"), callback_data="my_account")],
         [InlineKeyboardButton(get_trans(user_id, "btn_currency"), callback_data="currency_menu")],
         [InlineKeyboardButton(get_trans(user_id, "btn_support"), url=f"https://t.me/{SUPPORT_USERNAME}")]
@@ -341,19 +349,6 @@ async def update_user_orders_status(user_id, context, update_obj=None):
         return
     
     recent_orders = user_orders[user_id]
-    
-    client_name = "مستخدم تيليجرام"
-    if update_obj and update_obj.effective_user:
-        if update_obj.effective_user.first_name:
-            client_name = update_obj.effective_user.first_name
-    else:
-        try:
-            chat_user = await context.bot.get_chat(user_id)
-            if chat_user.first_name:
-                client_name = chat_user.first_name
-        except:
-            pass
-
     for o in recent_orders:
         old_status = str(o.get("status", "")).strip().lower()
         if old_status in ["completed", "complete", "success", "canceled", "partial"]:
@@ -361,11 +356,7 @@ async def update_user_orders_status(user_id, context, update_obj=None):
             
         o_id = str(o["order_id"])
         try:
-            payload = {
-                "key": SMM_API_KEY,
-                "action": "status",
-                "order": o_id
-            }
+            payload = {"key": SMM_API_KEY, "action": "status", "order": o_id}
             res = requests.post(SMM_API_URL, data=payload, timeout=10).json()
             
             if isinstance(res, dict):
@@ -388,20 +379,6 @@ async def update_user_orders_status(user_id, context, update_obj=None):
                         await context.bot.send_message(chat_id=user_id, text=success_msg, parse_mode="Markdown")
                     except:
                         pass
-
-                    channel_proof_msg = (
-                        f"⭐ **تم التسليم بنجاح** ⭐\n\n"
-                        f"👑 **اسم العميل:** `{client_name}`\n"
-                        f"💎 **الخدمة:** {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
-                        f"🔥 **العدد:** {o.get('qty')}\n"
-                        f"💸 **المبلغ:** {format_price(user_id, o.get('total_cost', 0))}\n"
-                        f"🛡 **الحالة:** تم التسليم ✅\n\n"
-                        f"🎁 **شكراً لثقتك بنا – L.G ❤️**"
-                    )
-                    try:
-                        await context.bot.send_message(chat_id=CHANNEL_ID, text=channel_proof_msg, parse_mode="Markdown")
-                    except Exception as channel_err:
-                        print(f"خطأ في إرسال الإثبات للقناة: {channel_err}")
                 elif site_status:
                     o["status"] = site_status.capitalize()
                     save_orders_data()
@@ -474,6 +451,77 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("تم إغلاق القائمة.")
         return
 
+    if data == "daily_gift":
+        user_states.pop(user_id, None)
+        if not daily_gift_items:
+            load_services()
+            
+        keyboard = []
+        surprise_titles = [
+            "🎁 مفاجأة الهدية الأولى (اضغط للاستلام) 🔥",
+            "🎁 مفاجأة الهدية الثانية (اضغط للاستلام) 💎"
+        ]
+        
+        for idx, item in enumerate(daily_gift_items[:2]):
+            s, platform = item
+            s_id = s.get("service")
+            btn_label = surprise_titles[idx] if idx < len(surprise_titles) else f"🎁 هدية مغرية رقم {idx+1}"
+            keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"gsrv_{s_id}")])
+        
+        if not keyboard:
+            keyboard.append([InlineKeyboardButton("❌ جاري تحضير المفاجآت، حاول لاحقاً", callback_data="main_menu")])
+
+        keyboard.extend([
+            [InlineKeyboardButton(get_trans(user_id, "exit"), callback_data="exit_action"), InlineKeyboardButton(get_trans(user_id, "back"), callback_data="main_menu")],
+            [InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu"), InlineKeyboardButton(get_trans(user_id, "back_step"), callback_data="main_menu")]
+        ])
+        try:
+            await query.edit_message_text("🎁 **قسم الهدايا اليومية والمفاجآت السريعة:**\n\nاختر إحدى الهدايا أدناه، خدمات مجانية فاخرة متجددة باستمرار!", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        except:
+            pass
+        return
+
+    if data.startswith("gsrv_"):
+        s_id = data.replace("gsrv_", "")
+        selected_service = None
+        detected_platform = ""
+        
+        for item in daily_gift_items:
+            s, platform = item
+            if str(s.get("service")) == str(s_id):
+                selected_service = s
+                detected_platform = platform
+                break
+        
+        if not selected_service:
+            await query.answer("❌ عذراً، انتهت هذه الهدية أو تم تحديثها.", show_alert=True)
+            return
+
+        user_states[user_id] = {"step": "waiting_gift_quantity", "service_id": s_id, "is_gift": True}
+        
+        service_name = selected_service.get("name", "خدمة رقمية")
+        min_q = selected_service.get("min", 10)
+        max_q = selected_service.get("max", 10)
+        
+        text = (
+            f"🛒 تفاصيل الخدمة:\n\n"
+            f"📌 الاسم: {service_name}\n"
+            f"🆔 رقم الخدمة: {s_id}\n"
+            f"🎁 السعر: هدية مجانية 100% 🎁\n"
+            f"📉 الحد الأدنى: {min_q}\n"
+            f"📈 الحد الأقصى: {max_q}\n\n"
+            f"📊 أرسل الآن الكمية المطلوبة (اكتب **10**):"
+        )
+        keyboard = [
+            [InlineKeyboardButton(get_trans(user_id, "exit"), callback_data="exit_action"), InlineKeyboardButton(get_trans(user_id, "back"), callback_data="daily_gift")],
+            [InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu"), InlineKeyboardButton(get_trans(user_id, "back_step"), callback_data="daily_gift")]
+        ]
+        try:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        except:
+            pass
+        return
+
     if data == "currency_menu":
         user_states.pop(user_id, None)
         keyboard = []
@@ -539,17 +587,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if s_id: break
 
             if not s_id:
-                for cat in cached_subcategories:
-                    for sub_c in cached_subcategories[cat]:
-                        for s in cached_subcategories[cat][sub_c]:
-                            if target_order.get("service_name") in s.get("name", ""):
-                                s_id = s.get("service")
-                                break
-                        if s_id: break
-                    if s_id: break
-
-            if not s_id:
-                await query.answer("❌ عذراً، هذه الخدمة لم تعد متوفرة حالياً في القائمة.", show_alert=True)
+                await query.answer("❌ عذراً، هذه الخدمة لم تعد متوفرة حالياً.", show_alert=True)
                 return
 
             selected_service = None
@@ -612,8 +650,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await query.answer(f"❌ فشل التنفيذ: {res.get('error', 'خطأ')}", show_alert=True)
         except Exception as e:
-            print(f"خطأ في إعادة الطلب السريع: {e}")
-            await query.answer("❌ حدث خطأ أثناء محاولة إعادة الطلب.", show_alert=True)
+            print(f"خطأ في إعادة الطلب: {e}")
+            await query.answer("❌ حدث خطأ.", show_alert=True)
         return
 
     if data.startswith("approve_dep_") or data.startswith("reject_dep_"):
@@ -650,7 +688,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 print(f"خطأ في إبلاغ المستخدم بالقبول: {e}")
-                
         else:
             new_caption = current_caption + "\n\n❌ حالة الطلب: تم رفض عملية الإيداع."
             try:
@@ -664,7 +701,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=target_user_id,
-                    text="❌ عذراً، تم رفض عملية الإيداع الخاصة بك من قبل الإدارة.\n\nإذا كانت هناك مشكلة، يرجى التواصل مع الدعم."
+                    text="❌ عذراً، تم رفض عملية الإيداع الخاصة بك من قبل الإدارة."
                 )
             except Exception as e:
                 print(f"خطأ في إبلاغ المستخدم بالرفض: {e}")
@@ -790,10 +827,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         for s in cached_subcategories[cat][sub_c]:
                             if str(s.get('service')) == str(s_id):
                                 raw_name = s.get('name')
-                                if len(raw_name) > 40:
-                                    found_name = f"🔸 {raw_name[:37]}..."
-                                else:
-                                    found_name = f"🔸 {raw_name}"
+                                found_name = f"🔸 {raw_name[:37]}..." if len(raw_name) > 40 else f"🔸 {raw_name}"
                                 break
                 keyboard.append([InlineKeyboardButton(found_name, callback_data=f"srv_{s_id}")])
 
@@ -852,48 +886,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
-        elif data == "admin_panel":
-            if user_id != ADMIN_ID: return
-            user_states.pop(user_id, None)
-            try:
-                await query.edit_message_text("🛠 لوحة تحكم الأدمن:", reply_markup=InlineKeyboardMarkup(get_admin_menu_keyboard()))
-            except:
-                pass
-
-        elif data == "admin_add_balance":
-            if user_id != ADMIN_ID: return
-            user_states[user_id] = {"step": "admin_waiting_add"}
-            keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
-            try:
-                await query.edit_message_text("➕ أرسل: USER_ID AMOUNT", reply_markup=InlineKeyboardMarkup(keyboard))
-            except:
-                pass
-
-        elif data == "admin_sub_balance":
-            if user_id != ADMIN_ID: return
-            user_states[user_id] = {"step": "admin_waiting_sub"}
-            keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
-            try:
-                await query.edit_message_text("➖ أرسل: USER_ID AMOUNT", reply_markup=InlineKeyboardMarkup(keyboard))
-            except:
-                pass
-
-        elif data == "admin_stats":
-            if user_id != ADMIN_ID: return
-            site_balance = check_site_balance()
-            keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
-            try:
-                await query.edit_message_text(f"📊 رصيد الموقع: {site_balance} دولار", reply_markup=InlineKeyboardMarkup(keyboard))
-            except:
-                pass
-
         elif data == "show_categories":
             user_states.pop(user_id, None)
             if not cached_subcategories: 
                 load_services()
             
             keyboard = [
-                [InlineKeyboardButton("خدمات مجانيه 🎁", callback_data="platform_مجانية")],
                 [InlineKeyboardButton("خدمات فيسبوك 📘", callback_data="platform_فيسبوك")],
                 [InlineKeyboardButton("خدمات انستجرام 📸", callback_data="platform_انستجرام")],
                 [InlineKeyboardButton("خدمات واتساب 🟢", callback_data="platform_واتساب")],
@@ -947,12 +945,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for s in current_services:
                 s_id = s.get("service")
                 s_name = s.get("name", "")
-                
-                if len(s_name) > 42:
-                    btn_text = f"🔸 {s_name[:39]}..."
-                else:
-                    btn_text = f"🔸 {s_name}"
-                
+                btn_text = f"🔸 {s_name[:39]}..." if len(s_name) > 42 else f"🔸 {s_name}"
                 keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"srv_{s_id}")])
                 
             nav_buttons = []
@@ -1119,14 +1112,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for s in matching_services[:15]:
                 s_id = s.get("service")
                 s_name = s.get("name", "")
-                if len(s_name) > 42:
-                    btn_text = f"🔍 {s_name[:39]}..."
-                else:
-                    btn_text = f"🔍 {s_name}"
+                btn_text = f"🔍 {s_name[:39]}..." if len(s_name) > 42 else f"🔍 {s_name}"
                 keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"srv_{s_id}")])
                 
             keyboard.append([InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")])
             await update.message.reply_text(f"🔍 نتائج البحث:", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+
+        elif step == "waiting_gift_quantity":
+            try:
+                qty = int(text)
+            except ValueError:
+                await update.message.reply_text("❌ يرجى إدخال رقم صحيح للكمية:")
+                return
+            
+            if qty != 10:
+                await update.message.reply_text("❌ عذراً، الكمية المخصصة للهدية اليومية هي 10 فقط! يرجى إدخال 10:")
+                return
+                
+            s_id = state_data.get("service_id")
+            
+            user_states[user_id] = {"step": "waiting_gift_link", "service_id": s_id, "qty": qty, "is_gift": True}
+            await update.message.reply_text(f"🔗 أرسل الآن الرابط المطلوب لتنفيذ المفاجأة:")
+            return
+
+        elif step == "waiting_gift_link":
+            link = text
+            s_id = state_data.get("service_id")
+            qty = state_data.get("qty")
+            user_states.pop(user_id, None)
+            
+            selected_service = None
+            for item in daily_gift_items:
+                s, platform = item
+                if str(s.get("service")) == str(s_id):
+                    selected_service = s
+                    break
+            
+            if not selected_service:
+                await update.message.reply_text("❌ حدث خطأ أو انتهت صلاحية هذه الهدية، يرجى المحاولة لاحقاً.")
+                return
+            
+            payload = {"key": SMM_API_KEY, "action": "add", "service": s_id, "link": link, "quantity": qty}
+            try:
+                res = requests.post(SMM_API_URL, data=payload, timeout=15).json()
+                if "order" in res:
+                    order_id = res["order"]
+                    await update.message.reply_text(f"🎉 **مبروك! تم تنفيذ الهدية المفاجئة بنجاح!**\n\nرقم الطلب السري: {order_id}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]), parse_mode="Markdown")
+                else:
+                    await update.message.reply_text(f"❌ فشل التنفيذ: {res.get('error', 'خطأ')}")
+            except:
+                await update.message.reply_text("❌ خطأ في الاتصال بالسيرفر.")
             return
 
         elif step == "waiting_quantity":
@@ -1222,26 +1258,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(f"❌ فشل التنفيذ: {res.get('error', 'خطأ')}")
             except:
                 await update.message.reply_text("❌ خطأ في الاتصال بالسيرفر.")
-            return
-
-        elif step in ["admin_waiting_add", "admin_waiting_sub"]:
-            if user_id != ADMIN_ID: return
-            user_states.pop(user_id, None)
-            parts = text.split()
-            try:
-                target_id = int(parts[0])
-                amount = float(parts[1])
-            except Exception:
-                await update.message.reply_text("❌ الصيغة خاطئة. استخدم: USER_ID AMOUNT")
-                return
-            
-            if target_id not in user_balances: user_balances[target_id] = 0.0
-            if step == "admin_waiting_add":
-                user_balances[target_id] += amount
-            else:
-                user_balances[target_id] = max(0.0, user_balances[target_id] - amount)
-            save_balances()
-            await update.message.reply_text(f"✅ تم التعديل بنجاح للمستخدم {target_id}. الرصيد الحالي: {user_balances[target_id]}")
             return
 
 def main():
