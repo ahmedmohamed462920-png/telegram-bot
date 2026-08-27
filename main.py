@@ -4,6 +4,7 @@ import logging
 import time
 import random
 import requests
+from pymongo import MongoClient
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -15,18 +16,22 @@ SUPPORT_USERNAME = "AHMED1_mo600"
 SMM_API_URL = "https://igcpanel.com/api/v2"
 SMM_API_KEY = "3d5b4555b8c244318fbec23902de49d2"
 
+MONGO_URI = "mongodb://ahmed462920mohamed_db_user:9YNC0fcUy02liEdV@ac-h69by4r-shard-00-00.ksgqrjd.mongodb.net:27017,ac-h69by4r-shard-00-01.ksgqrjd.mongodb.net:27017,ac-h69by4r-shard-00-02.ksgqrjd.mongodb.net:27017/?ssl=true&replicaSet=atlas-adx6rj-shard-0&authSource=admin&appName=Cluster0"
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["telegram_smm_bot"]
+
+balances_col = db["user_balances"]
+orders_col = db["user_orders"]
+referrals_col = db["user_referrals"]
+favorites_col = db["user_favorites"]
+currencies_col = db["user_currencies"]
+langs_col = db["user_langs"]
+banned_col = db["user_banned"]
+settings_col = db["bot_settings"]
+
 VODAFONE_WALLET = "01018729516"
 WALLET_NAME = "AHMED"
 USDT_TRC20_WALLET = "THuftcx4uSZYsjXyhG2kx2W1kGNycxBtbe"
-
-BALANCES_FILE = "user_balances.json"
-ORDERS_FILE = "user_orders.json"
-REFERRALS_FILE = "user_referrals.json"
-FAVS_FILE = "user_favorites.json"
-USER_CURRENCIES_FILE = "user_currencies.json"
-USER_LANGS_FILE = "user_langs.json"
-DAILY_GIFT_FILE = "user_daily_gifts.json"
-DAILY_GIFT_LIMIT_FILE = "user_daily_gift_limits.json"
 
 CURRENCIES = {
     "EGP": {"name": "جنيه مصري 🇪🇬", "rate": 1.0, "symbol": "ج.م"},
@@ -94,54 +99,114 @@ cached_subcategories = {}
 daily_gift_items = [] 
 user_states = {}    
 
-def load_json_file(filename, default_val):
-    if os.path.exists(filename):
-        try:
-            with open(filename, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"خطأ في قراءة الملف {filename}: {e}")
-    return default_val
+def load_settings():
+    doc = settings_col.find_one({"_id": "global_settings"})
+    if doc:
+        return float(doc.get("profit_margin", 1.35))
+    return 1.35
 
-def save_json_file(filename, data):
-    try:
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"خطأ في حفظ الملف {filename}: {e}")
+def save_settings(margin):
+    settings_col.update_one({"_id": "global_settings"}, {"$set": {"profit_margin": float(margin)}}, upsert=True)
 
-user_balances = {int(k): float(v) for k, v in load_json_file(BALANCES_FILE, {}).items()}
-user_orders = {int(k): v for k, v in load_json_file(ORDERS_FILE, {}).items()}
-referrals_data = {int(k): v for k, v in load_json_file(REFERRALS_FILE, {}).items()}
-user_favorites = {int(k): v for k, v in load_json_file(FAVS_FILE, {}).items()}
-user_currencies_data = load_json_file(USER_CURRENCIES_FILE, {})
-user_langs_data = load_json_file(USER_LANGS_FILE, {})
-user_daily_gifts = {int(k): float(v) for k, v in load_json_file(DAILY_GIFT_FILE, {}).items()}
-user_daily_gift_limits = {int(k): float(v) for k, v in load_json_file(DAILY_GIFT_LIMIT_FILE, {}).items()}
+PROFIT_MARGIN = load_settings()
+
+def load_balances_db():
+    data = {}
+    for doc in balances_col.find():
+        data[int(doc["user_id"])] = float(doc["balance"])
+    return data
+
+def save_balances_db(data):
+    for uid, bal in data.items():
+        balances_col.update_one({"user_id": int(uid)}, {"$set": {"balance": float(bal)}}, upsert=True)
+
+def load_orders_db():
+    data = {}
+    for doc in orders_col.find():
+        data[int(doc["user_id"])] = doc["orders"]
+    return data
+
+def save_orders_db(data):
+    for uid, ords in data.items():
+        orders_col.update_one({"user_id": int(uid)}, {"$set": {"orders": ords}}, upsert=True)
+
+def load_referrals_db():
+    data = {}
+    for doc in referrals_col.find():
+        data[int(doc["user_id"])] = doc["data"]
+    return data
+
+def save_referrals_db(data):
+    for uid, ref_data in data.items():
+        referrals_col.update_one({"user_id": int(uid)}, {"$set": {"data": ref_data}}, upsert=True)
+
+def load_favorites_db():
+    data = {}
+    for doc in favorites_col.find():
+        data[int(doc["user_id"])] = doc["favorites"]
+    return data
+
+def save_favorites_db(data):
+    for uid, favs in data.items():
+        favorites_col.update_one({"user_id": int(uid)}, {"$set": {"favorites": favs}}, upsert=True)
+
+def load_currencies_db():
+    data = {}
+    for doc in currencies_col.find():
+        data[str(doc["user_id"])] = doc["currency"]
+    return data
+
+def save_currencies_db(data):
+    for uid, curr in data.items():
+        currencies_col.update_one({"user_id": str(uid)}, {"$set": {"currency": curr}}, upsert=True)
+
+def load_langs_db():
+    data = {}
+    for doc in langs_col.find():
+        data[str(doc["user_id"])] = doc["lang"]
+    return data
+
+def save_langs_db(data):
+    for uid, lang in data.items():
+        langs_col.update_one({"user_id": str(uid)}, {"$set": {"lang": lang}}, upsert=True)
+
+def load_banned_db():
+    banned = set()
+    for doc in banned_col.find():
+        banned.add(int(doc["user_id"]))
+    return banned
+
+def save_banned_db(uid, is_banned):
+    if is_banned:
+        banned_col.update_one({"user_id": int(uid)}, {"$set": {"banned": True}}, upsert=True)
+    else:
+        banned_col.delete_one({"user_id": int(uid)})
+
+user_balances = load_balances_db()
+user_orders = load_orders_db()
+referrals_data = load_referrals_db()
+user_favorites = load_favorites_db()
+user_currencies_data = load_currencies_db()
+user_langs_data = load_langs_db()
+banned_users = load_banned_db()
 
 def save_balances():
-    save_json_file(BALANCES_FILE, user_balances)
+    save_balances_db(user_balances)
 
 def save_orders_data():
-    save_json_file(ORDERS_FILE, user_orders)
+    save_orders_db(user_orders)
 
 def save_referrals_data():
-    save_json_file(REFERRALS_FILE, referrals_data)
+    save_referrals_db(referrals_data)
 
 def save_favorites_data():
-    save_json_file(FAVS_FILE, user_favorites)
+    save_favorites_db(user_favorites)
 
 def save_user_currencies():
-    save_json_file(USER_CURRENCIES_FILE, user_currencies_data)
+    save_currencies_db(user_currencies_data)
 
 def save_user_langs():
-    save_json_file(USER_LANGS_FILE, user_langs_data)
-
-def save_daily_gifts():
-    save_json_file(DAILY_GIFT_FILE, user_daily_gifts)
-
-def save_daily_gift_limits():
-    save_json_file(DAILY_GIFT_LIMIT_FILE, user_daily_gift_limits)
+    save_langs_db(user_langs_data)
 
 def get_user_lang(user_id):
     return user_langs_data.get(str(user_id), "ar")
@@ -152,7 +217,7 @@ def get_trans(user_id, key):
 
 def translate_status(status_str):
     s = str(status_str).strip().lower()
-    if s in ["completed", "complete", "success"]:
+    if s in ["completed", "complete", "success", "finished", "done"]:
         return "تم التسليم ✅"
     elif s in ["in progress", "inprogress", "processing", "pending"]:
         return "قيد التنفيذ 🔄"
@@ -290,7 +355,7 @@ def load_services():
 
                 base_price = original_rate * 50  
                 s["api_rate"] = base_price          
-                s["client_rate"] = base_price  
+                s["client_rate"] = base_price * PROFIT_MARGIN  
 
                 real_platform = detect_service_platform(s_name, cat)
                 if real_platform == "أخرى" or real_platform == "عام":
@@ -331,9 +396,11 @@ def get_main_menu_keyboard(user_id=None):
 
 def get_admin_menu_keyboard():
     return [
-        [InlineKeyboardButton("💰 إضافة رصيد لمستخدم", callback_data="admin_add_balance")],
-        [InlineKeyboardButton("➖ خصم رصيد من مستخدم", callback_data="admin_sub_balance")],
-        [InlineKeyboardButton("👥 إحصائيات البوت", callback_data="admin_stats")],
+        [InlineKeyboardButton("💰 إضافة رصيد لمستخدم", callback_data="admin_add_balance"), InlineKeyboardButton("➖ خصم رصيد من مستخدم", callback_data="admin_sub_balance")],
+        [InlineKeyboardButton("🔍 الاستعلام عن رصيد مستخدم", callback_data="admin_check_balance")],
+        [InlineKeyboardButton("📢 إذاعة رسالة للجميع", callback_data="admin_broadcast"), InlineKeyboardButton("💵 تعديل نسبة الربح", callback_data="admin_set_profit")],
+        [InlineKeyboardButton("🚫 حظر مستخدم", callback_data="admin_ban"), InlineKeyboardButton("🟢 إلغاء حظر مستخدم", callback_data="admin_unban")],
+        [InlineKeyboardButton("📊 رصيد موقع SMM الأساسي", callback_data="admin_smm_balance"), InlineKeyboardButton("📈 إحصائيات البوت والمالية", callback_data="admin_stats")],
         [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
     ]
 
@@ -353,7 +420,7 @@ async def update_user_orders_status(user_id, context, update_obj=None):
     recent_orders = user_orders[user_id]
     for o in recent_orders:
         old_status = str(o.get("status", "")).strip().lower()
-        if old_status in ["completed", "complete", "success", "canceled", "cancelled", "partial"]:
+        if "تم التسليم" in old_status or "ملغي" in old_status or "مكتمل جزئياً" in old_status:
             continue
             
         o_id = str(o["order_id"])
@@ -370,18 +437,46 @@ async def update_user_orders_status(user_id, context, update_obj=None):
                     o["status"] = translate_status(site_status)
                     save_orders_data()
                     
-                    if site_status in ["completed", "complete", "success"]:
-                        success_msg = (
-                            f"✅ اكتمل طلبك بنجاح!\n"
-                            f"🔢 رقم الطلب: {o_id}\n"
-                            f"📦 الخدمة: {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
-                            f"📊 الكمية: {o.get('qty')}\n"
-                            f"🔗 الرابط: {o.get('link')}"
-                        )
-                        try:
-                            await context.bot.send_message(chat_id=user_id, text=success_msg, parse_mode="Markdown")
-                        except:
-                            pass
+                    if site_status in ["completed", "complete", "success", "finished", "done"]:
+                        if not o.get("notified", False):
+                            o["notified"] = True
+                            save_orders_data()
+
+                            success_msg = (
+                                f"✅ اكتمل طلبك بنجاح!\n"
+                                f"🔢 رقم الطلب: {o_id}\n"
+                                f"📦 الخدمة: {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
+                                f"📊 الكمية: {o.get('qty')}\n"
+                                f"🔗 الرابط: {o.get('link')}"
+                            )
+                            try:
+                                await context.bot.send_message(chat_id=user_id, text=success_msg, parse_mode="Markdown")
+                            except:
+                                pass
+                            
+                            try:
+                                customer_name = "عميل مميز"
+                                try:
+                                    chat_user = await context.bot.get_chat(user_id)
+                                    if chat_user.first_name:
+                                        customer_name = chat_user.first_name
+                                    elif chat_user.username:
+                                        customer_name = f"@{chat_user.username}"
+                                except:
+                                    pass
+
+                                channel_proof_msg = (
+                                    f"⭐ **تم التسليم بنجاح** ⭐\n\n"
+                                    f"👑 اسم العميل: {customer_name}\n"
+                                    f"💎 الخدمة: {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
+                                    f"🔥 العدد: {o.get('qty')}\n"
+                                    f"🔢 رقم الطلب: {o_id}\n"
+                                    f"✅ الحالة: تم التسليم\n\n"
+                                    f"❤️ شكراً لثقتك بنا - L.G"
+                                )
+                                await context.bot.send_message(chat_id=CHANNEL_ID, text=channel_proof_msg, parse_mode="Markdown")
+                            except Exception as channel_err:
+                                print(f"خطأ في إرسال الإثبات للقناة: {channel_err}")
         except Exception as e:
             print(f"خطأ في فحص حالة الطلب {o_id}: {e}")
 
@@ -392,6 +487,11 @@ async def background_orders_tracker(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
+    if user_id in banned_users:
+        if update.message:
+            await update.message.reply_text("❌ عذراً، تم حظرك من استخدام هذا البوت.")
+        return
+
     args = context.args
     if args and args[0].startswith("ref_"):
         try:
@@ -443,6 +543,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = update.effective_user.id
 
+    if user_id in banned_users and user_id != ADMIN_ID:
+        try:
+            await query.edit_message_text("❌ تم حظرك من استخدام البوت.")
+        except:
+            pass
+        return
+
     if data == "exit_action":
         user_states.pop(user_id, None)
         try:
@@ -450,6 +557,69 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             await query.edit_message_text("تم إغلاق القائمة.")
         return
+
+    # Admin Panel Actions
+    if user_id == ADMIN_ID:
+        if data == "admin_add_balance":
+            user_states[user_id] = {"step": "admin_waiting_add_bal"}
+            await query.edit_message_text("💰 أرسل (آيدي المستخدم) و(المبلغ) المراد إضافته بهطول:\nمثال: `123456789 50`", parse_mode="Markdown")
+            return
+        elif data == "admin_sub_balance":
+            user_states[user_id] = {"step": "admin_waiting_sub_bal"}
+            await query.edit_message_text("➖ أرسل (آيدي المستخدم) و(المبلغ) المراد خصمه بهطول:\nمثال: `123456789 20`", parse_mode="Markdown")
+            return
+        elif data == "admin_check_balance":
+            user_states[user_id] = {"step": "admin_waiting_check_bal"}
+            await query.edit_message_text("🔍 أرسل آيدي (ID) المستخدم المراد الاستعلام عن رصيده:", parse_mode="Markdown")
+            return
+        elif data == "admin_broadcast":
+            user_states[user_id] = {"step": "admin_waiting_broadcast"}
+            await query.edit_message_text("📢 أرسل الآن الرسالة أو الإعلان الذي تريد إذاعته لكل المستخدمين:")
+            return
+        elif data == "admin_set_profit":
+            user_states[user_id] = {"step": "admin_waiting_profit"}
+            await query.edit_message_text(f"💵 نسبة الربح الحالية هي: `{PROFIT_MARGIN}`\n\nأرسل النسبة الجديدة (مثال: `1.35` أو `1.4`):", parse_mode="Markdown")
+            return
+        elif data == "admin_ban":
+            user_states[user_id] = {"step": "admin_waiting_ban"}
+            await query.edit_message_text("🚫 أرسل آيدي المستخدم المراد حظره:")
+            return
+        elif data == "admin_unban":
+            user_states[user_id] = {"step": "admin_waiting_unban"}
+            await query.edit_message_text("🟢 أرسل آيدي المستخدم المراد إلغاء حظره:")
+            return
+        elif data == "admin_smm_balance":
+            try:
+                res = requests.post(SMM_API_URL, data={"key": SMM_API_KEY, "action": "balance"}, timeout=10).json()
+                bal_val = res.get("balance", "غير معروف")
+                curr_val = res.get("currency", "USD")
+                text_smm = f"📊 **رصيد موقع SMM الأساسي:**\n\n💰 الرصيد: `{bal_val} {curr_val}`"
+            except Exception as e:
+                text_smm = f"❌ حدث خطأ أثناء جلب الرصيد: {e}"
+            
+            await query.edit_message_text(text_smm, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_menu_back")]]), parse_mode="Markdown")
+            return
+        elif data == "admin_stats":
+            total_users = balances_col.count_documents({})
+            total_orders_count = 0
+            for uid, ords in user_orders.items():
+                total_orders_count += len(ords)
+            
+            total_money_in_wallets = sum(user_balances.values())
+            
+            stats_text = (
+                f"📈 **إحصائيات البوت الشاملة:**\n\n"
+                f"👥 إجمالي المستخدمين: `{total_users}`\n"
+                f"📦 إجمالي الطلبات: `{total_orders_count}`\n"
+                f"💰 إجمالي الأرصدة بالمحافظ: `{total_money_in_wallets:.2f} جنيه`\n"
+                f"💵 نسبة الربح المفعلة: `{PROFIT_MARGIN}`"
+            )
+            await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_menu_back")]]), parse_mode="Markdown")
+            return
+        elif data == "admin_menu_back":
+            user_states.pop(user_id, None)
+            await query.edit_message_text("🛠 لوحة تحكم الأدمن:", reply_markup=InlineKeyboardMarkup(get_admin_menu_keyboard()))
+            return
 
     if data == "currency_menu":
         user_states.pop(user_id, None)
@@ -556,7 +726,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "qty": qty,
                     "link": link,
                     "total_cost": round(total_cost, 4),
-                    "status": "قيد التنفيذ 🔄"
+                    "status": "قيد التنفيذ 🔄",
+                    "notified": False
                 })
                 save_orders_data()
 
@@ -771,7 +942,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data == "my_orders":
             user_states.pop(user_id, None)
-            await update_user_orders_status(user_id, context, update_obj=update)
+            await update_user_orders_status(user_id, context)
             
             orders = user_orders.get(user_id, [])
             if not orders:
@@ -960,6 +1131,125 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
+    if user_id in banned_users and user_id != ADMIN_ID:
+        return
+
+    if user_id == ADMIN_ID and user_id in user_states:
+        state_data = user_states[user_id]
+        step = state_data.get("step")
+        
+        if step == "admin_waiting_add_bal":
+            user_states.pop(user_id, None)
+            try:
+                parts = update.message.text.strip().split()
+                target_uid = int(parts[0])
+                amount = float(parts[1])
+                
+                if target_uid not in user_balances:
+                    user_balances[target_uid] = 0.0
+                user_balances[target_uid] += amount
+                save_balances()
+                
+                await update.message.reply_text(f"✅ تمت إضافة مبلغ `{amount}` بنجاح للمستخدم `{target_uid}`.", parse_mode="Markdown")
+                try:
+                    await context.bot.send_message(target_uid, f"🎁 قامت الإدارة بإضافة مبلغ `{amount}` إلى رصيدك!")
+                except:
+                    pass
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطأ في الإدخال: {e}\nالصيغة الصحيحة: `ID المبلغ`")
+            return
+
+        elif step == "admin_waiting_sub_bal":
+            user_states.pop(user_id, None)
+            try:
+                parts = update.message.text.strip().split()
+                target_uid = int(parts[0])
+                amount = float(parts[1])
+                
+                if target_uid not in user_balances:
+                    user_balances[target_uid] = 0.0
+                user_balances[target_uid] = max(0.0, user_balances[target_uid] - amount)
+                save_balances()
+                
+                await update.message.reply_text(f"✅ تمت خصم مبلغ `{amount}` بنجاح من المستخدم `{target_uid}`.", parse_mode="Markdown")
+                try:
+                    await context.bot.send_message(target_uid, f"⚠️ قامت الإدارة بخصم مبلغ `{amount}` من رصيدك.")
+                except:
+                    pass
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطأ في الإدخال: {e}\nالصيغة الصحيحة: `ID المبلغ`")
+            return
+
+        elif step == "admin_waiting_check_bal":
+            user_states.pop(user_id, None)
+            try:
+                target_uid = int(update.message.text.strip())
+                user_bal = user_balances.get(target_uid, 0.0)
+                await update.message.reply_text(
+                    f"🔍 **نتيجة الاستعلام عن المستخدم:**\n\n"
+                    f"🆔 الآيدي: `{target_uid}`\n"
+                    f"💰 عدد النقاط أو الرصيد: `{user_bal:.2f}`",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطأ في الآيدي المدخل: {e}\nيرجى إرسال أرقام صحيحة فقط.")
+            return
+
+        elif step == "admin_waiting_broadcast":
+            user_states.pop(user_id, None)
+            bc_text = update.message.text
+            all_users = list(user_balances.keys())
+            success_count = 0
+            
+            status_msg = await update.message.reply_text("⏳ جاري إرسال الإذاعة لكل المستخدمين...")
+            for uid in all_users:
+                try:
+                    await context.bot.send_message(chat_id=uid, text=bc_text)
+                    success_count += 1
+                except:
+                    pass
+            try:
+                await status_msg.edit_text(f"✅ تم بنجاح إرسال الإذاعة إلى `{success_count}` مستخدم.")
+            except:
+                pass
+            return
+
+        elif step == "admin_waiting_profit":
+            user_states.pop(user_id, None)
+            global PROFIT_MARGIN
+            try:
+                new_margin = float(update.message.text.strip())
+                PROFIT_MARGIN = new_margin
+                save_settings(new_margin)
+                load_services() # تحديث أسعار الخدمات فورا بالنسبة الجديدة
+                await update.message.reply_text(f"✅ تم تحديث نسبة الربح بنجاح إلى: `{PROFIT_MARGIN}` وتم إعادة تحميل أسعار الخدمات.", parse_mode="Markdown")
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطأ في القيمة المدخلة: {e}")
+            return
+
+        elif step == "admin_waiting_ban":
+            user_states.pop(user_id, None)
+            try:
+                target_uid = int(update.message.text.strip())
+                banned_users.add(target_uid)
+                save_banned_db(target_uid, True)
+                await update.message.reply_text(f"✅ تم حظر المستخدم `{target_uid}` بنجاح.", parse_mode="Markdown")
+            except Exception as e:
+                await update.message.reply_text(f"❌ حدث خطأ: {e}")
+            return
+
+        elif step == "admin_waiting_unban":
+            user_states.pop(user_id, None)
+            try:
+                target_uid = int(update.message.text.strip())
+                if target_uid in banned_users:
+                    banned_users.remove(target_uid)
+                save_banned_db(target_uid, False)
+                await update.message.reply_text(f"✅ تم إلغاء حظر المستخدم `{target_uid}` بنجاح.", parse_mode="Markdown")
+            except Exception as e:
+                await update.message.reply_text(f"❌ حدث خطأ: {e}")
+            return
+
     if user_id in user_states and user_states[user_id].get("step") == "deposit_waiting_screenshot":
         if update.message.photo:
             photo_file_id = update.message.photo[-1].file_id
@@ -1129,7 +1419,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "qty": qty, 
                         "link": link,
                         "total_cost": round(total_cost, 4),
-                        "status": "قيد التنفيذ 🔄"
+                        "status": "قيد التنفيذ 🔄",
+                        "notified": False
                     })
                     save_orders_data()
                     
@@ -1156,7 +1447,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO & ~filters.COMMAND, handle_message))
     
-    print("البوت يعمل الآن...")
+    print("البوت يعمل الآن ومتصل بقاعدة بيانات MongoDB بنجاح مع كافة مميزات الأدمن...")
     app.run_polling()
 
 if __name__ == "__main__":
