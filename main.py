@@ -11,7 +11,7 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 TOKEN = "8693513468:AAEktA9vOoK457f5JtJs2O4ZV3trh2kTsNo"
 ADMIN_ID = 8661031937
 _ID = -1004333526788
-CHANNEL_USERNAME = "@Jsoxkedoaoejfh"
+CHANNEL_USERNAME = "Jsoxkedoaoejfh"
 SUPPORT_USERNAME = "Hdiwjfk65BT"
 SMM_API_URL = "https://igcpanel.com/api/v2"
 SMM_API_KEY = "3d5b4555b8c244318fbec23902de49d2"
