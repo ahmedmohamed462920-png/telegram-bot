@@ -9,9 +9,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 TOKEN = "8794824914:AAE43QEfQ-Fh60EQdRP6emUnVdevl4ppt1A"
-ADMIN_ID = 8697852304
+ADMIN_ID = 8661031937
 CHANNEL_ID = -1004333526788
-CHANNEL_USERNAME = "Jsoxkedoaoejfh"
+CHANNEL_USERNAME = "https://t.me/Jsoxkedoaoejfh"
 SUPPORT_USERNAME = "Hdiwjfk65BT"
 SMM_API_URL = "https://igcpanel.com/api/v2"
 SMM_API_KEY = "3d5b4555b8c244318fbec23902de49d2"
