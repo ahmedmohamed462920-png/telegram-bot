@@ -10,8 +10,8 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 TOKEN = "8693513468:AAEktA9vOoK457f5JtJs2O4ZV3trh2kTsNo"
 ADMIN_ID = 8661031937
-CHANNEL_ID = -1004333526788
-CHANNEL_USERNAME = "https://t.me/Jsoxkedoaoejfh"
+_ID = -1004333526788
+CHANNEL_USERNAME = "@Jsoxkedoaoejfh"
 SUPPORT_USERNAME = "Hdiwjfk65BT"
 SMM_API_URL = "https://igcpanel.com/api/v2"
 SMM_API_KEY = "3d5b4555b8c244318fbec23902de49d2"
@@ -58,7 +58,7 @@ LANGS = {
         "main_menu_btn": "🏠 القائمة الرئيسية",
         "back_step": "⬅️ رجوع خطوة",
         "sub_check": "⚠️ عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدام الخدمات.\n\nقم بالاشتراك ثم اضغط على زر التحقق أدناه 👇",
-        "sub_btn_channel": "📢 اشترك في قناة الإثباتات",
+        "sub_btn_": "📢 اشترك في قناة الإثباتات",
         "sub_btn_check": "✅ اشتركت، تحقق من الاشتراكات",
         "not_subbed": "❌ لم تقم بالاشتراك في القناة بعد!",
         "currency_title": "🌐 اختر عملة بلدك المفضلة لتحديث أسعار الخدمات أو قم بتغيير لغة البوت:",
@@ -82,10 +82,10 @@ LANGS = {
         "back": "🔙 Back",
         "main_menu_btn": "Main Menu",
         "back_step": "Back Step",
-        "sub_check": "⚠️ Sorry, you must subscribe to the bot channel first to use the services.\n\nSubscribe and then click the check button below 👇",
-        "sub_btn_channel": "📢 Subscribe to Channel",
+        "sub_check": "⚠️ Sorry, you must subscribe to the bot  first to use the services.\n\nSubscribe and then click the check button below 👇",
+        "sub_btn_": "📢 Subscribe to ",
         "sub_btn_check": "✅ I Subscribed, Check",
-        "not_subbed": "❌ You haven't subscribed to the channel yet!",
+        "not_subbed": "❌ You haven't subscribed to the  yet!",
         "currency_title": "🌐 Choose your preferred currency or change bot language:",
         "lang_section": "🌐 Change Bot Language:",
         "lang_ar": "Arabic 🇸🇦",
@@ -312,7 +312,7 @@ def classify_service_type(s_name, cat_name, platform=""):
 
     follower_keywords = [
         "follower", "متابع", "followers", "متابعين", "subscribers", "مشتركين", 
-        "member", "members", "انضمام", "أصدقاء", "أعضاء", "channel members", 
+        "member", "members", "انضمام", "أصدقاء", "أعضاء", " members", 
         "group members", "participants", "مشارك", "مشاركون", "snap score", "نقاط سناب"
     ]
     if any(k in text for k in follower_keywords) or any(k in cat_text for k in ["follower", "متابع", "subscriber", "مشترك", "member", "عضو", "أعضاء", "snap"]):
@@ -406,7 +406,7 @@ def get_admin_menu_keyboard():
 
 async def check_user_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
     try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        member = await context.bot.get_chat_member(chat_id=_ID, user_id=user_id)
         if member.status in ["member", "administrator", "creator"]:
             return True
     except Exception as e:
@@ -465,7 +465,7 @@ async def update_user_orders_status(user_id, context, update_obj=None):
                                 except:
                                     pass
 
-                                channel_proof_msg = (
+                                _proof_msg = (
                                     f"⭐ **تم التسليم بنجاح** ⭐\n\n"
                                     f"👑 اسم العميل: {customer_name}\n"
                                     f"💎 الخدمة: {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
@@ -474,9 +474,9 @@ async def update_user_orders_status(user_id, context, update_obj=None):
                                     f"✅ الحالة: تم التسليم\n\n"
                                     f"❤️ شكراً لثقتك بنا - L.G"
                                 )
-                                await context.bot.send_message(chat_id=CHANNEL_ID, text=channel_proof_msg, parse_mode="Markdown")
-                            except Exception as channel_err:
-                                print(f"خطأ في إرسال الإثبات للقناة: {channel_err}")
+                                await context.bot.send_message(chat_id=_ID, text=_proof_msg, parse_mode="Markdown")
+                            except Exception as _err:
+                                print(f"خطأ في إرسال الإثبات للقناة: {_err}")
         except Exception as e:
             print(f"خطأ في فحص حالة الطلب {o_id}: {e}")
 
@@ -511,7 +511,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_subscribed = await check_user_subscription(user_id, context)
     if not is_subscribed:
         keyboard = [
-            [InlineKeyboardButton(get_trans(user_id, "sub_btn_channel"), url=f"https://t.me/{CHANNEL_USERNAME}")],
+            [InlineKeyboardButton(get_trans(user_id, "sub_btn_"), url=f"https://t.me/{_USERNAME}")],
             [InlineKeyboardButton(get_trans(user_id, "sub_btn_check"), callback_data="check_sub")]
         ]
         text = get_trans(user_id, "sub_check")
@@ -824,7 +824,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_subscribed = await check_user_subscription(user_id, context)
     if not is_subscribed:
         keyboard = [
-            [InlineKeyboardButton(get_trans(user_id, "sub_btn_channel"), url=f"https://t.me/{CHANNEL_USERNAME}")],
+            [InlineKeyboardButton(get_trans(user_id, "sub_btn_"), url=f"https://t.me/{_USERNAME}")],
             [InlineKeyboardButton(get_trans(user_id, "sub_btn_check"), callback_data="check_sub")]
         ]
         try:
