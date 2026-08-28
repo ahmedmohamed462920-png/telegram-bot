@@ -8,7 +8,7 @@ from pymongo import MongoClient
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-TOKEN = "8942289190:AAFaylYUr3ySiUUCntptfXdTz8TcFCM7JRs"
+TOKEN = "8794824914:AAE43QEfQ-Fh60EQdRP6emUnVdevl4ppt1A"
 ADMIN_ID = 8697852304
 CHANNEL_ID = -1003931541362
 CHANNEL_USERNAME = "Jsoxkedoaoejf"
