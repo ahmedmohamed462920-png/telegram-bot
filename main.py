@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 TOKEN = "8794824914:AAE43QEfQ-Fh60EQdRP6emUnVdevl4ppt1A"
 ADMIN_ID = 8697852304
-CHANNEL_ID = -4333526788
+CHANNEL_ID = -1004333526788
 CHANNEL_USERNAME = "Jsoxkedoaoejfh"
 SUPPORT_USERNAME = "Hdiwjfk65BT"
 SMM_API_URL = "https://igcpanel.com/api/v2"
