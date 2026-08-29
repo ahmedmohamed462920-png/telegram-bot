@@ -10,11 +10,11 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 TOKEN = "8693513468:AAEktA9vOoK457f5JtJs2O4ZV3trh2kTsNo"
 ADMIN_ID = 8661031937
-_ID = -1004333526788
+CHANNEL_ID = -1004333526788
 CHANNEL_USERNAME = "Jsoxkedoaoejfh"
 SUPPORT_USERNAME = "Hdiwjfk65BT"
 SMM_API_URL = "https://igcpanel.com/api/v2"
-SMM_API_KEY = "3d5b4555b8c244318fbec23902de49d2"
+SMM_API_KEY = "6504235efb8beac5fad5a21ab646356f"
 
 MONGO_URI = "mongodb://ahmed462920mohamed_db_user:9YNC0fcUy02liEdV@ac-h69by4r-shard-00-00.ksgqrjd.mongodb.net:27017,ac-h69by4r-shard-00-01.ksgqrjd.mongodb.net:27017,ac-h69by4r-shard-00-02.ksgqrjd.mongodb.net:27017/?ssl=true&replicaSet=atlas-adx6rj-shard-0&authSource=admin&appName=Cluster0"
 mongo_client = MongoClient(MONGO_URI)
@@ -28,6 +28,7 @@ currencies_col = db["user_currencies"]
 langs_col = db["user_langs"]
 banned_col = db["user_banned"]
 settings_col = db["bot_settings"]
+promo_codes_col = db["promo_codes"] # مجموعة جديدة لأكواد الهدايا
 
 VODAFONE_WALLET = "01018729516"
 WALLET_NAME = "AHMED"
@@ -49,6 +50,7 @@ LANGS = {
         "btn_favs": "⭐ خدماتي المفضلة",
         "btn_orders": "📦 طلباتي السابقة وحالتها",
         "btn_payment": "💳 طرق وشحن الرصيد",
+        "btn_promo": "🎟 شحن كود هدية",
         "btn_account": "👤 حسابي",
         "btn_currency": "💱 تغيير العملة واللغة",
         "btn_support": "💬 تواصل مع الدعم",
@@ -58,7 +60,7 @@ LANGS = {
         "main_menu_btn": "🏠 القائمة الرئيسية",
         "back_step": "⬅️ رجوع خطوة",
         "sub_check": "⚠️ عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدام الخدمات.\n\nقم بالاشتراك ثم اضغط على زر التحقق أدناه 👇",
-        "sub_btn_": "📢 اشترك في قناة الإثباتات",
+        "sub_btn_channel": "📢 اشترك في قناة الإثباتات",
         "sub_btn_check": "✅ اشتركت، تحقق من الاشتراكات",
         "not_subbed": "❌ لم تقم بالاشتراك في القناة بعد!",
         "currency_title": "🌐 اختر عملة بلدك المفضلة لتحديث أسعار الخدمات أو قم بتغيير لغة البوت:",
@@ -74,6 +76,7 @@ LANGS = {
         "btn_favs": "⭐ My Favorites",
         "btn_orders": "📦 My Orders & Status",
         "btn_payment": "💳 Balance & Payment Methods",
+        "btn_promo": "🎟 Redeem Promo Code",
         "btn_account": "👤 My Account",
         "btn_currency": "💱 Currency & Language",
         "btn_support": "💬 Contact Support",
@@ -82,10 +85,10 @@ LANGS = {
         "back": "🔙 Back",
         "main_menu_btn": "Main Menu",
         "back_step": "Back Step",
-        "sub_check": "⚠️ Sorry, you must subscribe to the bot  first to use the services.\n\nSubscribe and then click the check button below 👇",
-        "sub_btn_": "📢 Subscribe to ",
+        "sub_check": "⚠️ Sorry, you must subscribe to the bot channel first to use the services.\n\nSubscribe and then click the check button below 👇",
+        "sub_btn_channel": "📢 Subscribe to Channel",
         "sub_btn_check": "✅ I Subscribed, Check",
-        "not_subbed": "❌ You haven't subscribed to the  yet!",
+        "not_subbed": "❌ You haven't subscribed to the channel yet!",
         "currency_title": "🌐 Choose your preferred currency or change bot language:",
         "lang_section": "🌐 Change Bot Language:",
         "lang_ar": "Arabic 🇸🇦",
@@ -312,7 +315,7 @@ def classify_service_type(s_name, cat_name, platform=""):
 
     follower_keywords = [
         "follower", "متابع", "followers", "متابعين", "subscribers", "مشتركين", 
-        "member", "members", "انضمام", "أصدقاء", "أعضاء", " members", 
+        "member", "members", "انضمام", "أصدقاء", "أعضاء", "channel members", 
         "group members", "participants", "مشارك", "مشاركون", "snap score", "نقاط سناب"
     ]
     if any(k in text for k in follower_keywords) or any(k in cat_text for k in ["follower", "متابع", "subscriber", "مشترك", "member", "عضو", "أعضاء", "snap"]):
@@ -389,6 +392,7 @@ def get_main_menu_keyboard(user_id=None):
         [InlineKeyboardButton(get_trans(user_id, "btn_favs"), callback_data="my_favorites")],
         [InlineKeyboardButton(get_trans(user_id, "btn_orders"), callback_data="my_orders")],
         [InlineKeyboardButton(get_trans(user_id, "btn_payment"), callback_data="payment_methods")],
+        [InlineKeyboardButton(get_trans(user_id, "btn_promo"), callback_data="promo_code_prompt")], # زر جديد لأكواد الهدايا
         [InlineKeyboardButton(get_trans(user_id, "btn_account"), callback_data="my_account")],
         [InlineKeyboardButton(get_trans(user_id, "btn_currency"), callback_data="currency_menu")],
         [InlineKeyboardButton(get_trans(user_id, "btn_support"), url=f"https://t.me/{SUPPORT_USERNAME}")]
@@ -398,6 +402,7 @@ def get_admin_menu_keyboard():
     return [
         [InlineKeyboardButton("💰 إضافة رصيد لمستخدم", callback_data="admin_add_balance"), InlineKeyboardButton("➖ خصم رصيد من مستخدم", callback_data="admin_sub_balance")],
         [InlineKeyboardButton("🔍 الاستعلام عن رصيد مستخدم", callback_data="admin_check_balance")],
+        [InlineKeyboardButton("🎟 إنشاء كود هدية جديد", callback_data="admin_create_promo")], # زر أدمن جديد للكود والمواعيد
         [InlineKeyboardButton("📢 إذاعة رسالة للجميع", callback_data="admin_broadcast"), InlineKeyboardButton("💵 تعديل نسبة الربح", callback_data="admin_set_profit")],
         [InlineKeyboardButton("🚫 حظر مستخدم", callback_data="admin_ban"), InlineKeyboardButton("🟢 إلغاء حظر مستخدم", callback_data="admin_unban")],
         [InlineKeyboardButton("📊 رصيد موقع SMM الأساسي", callback_data="admin_smm_balance"), InlineKeyboardButton("📈 إحصائيات البوت والمالية", callback_data="admin_stats")],
@@ -406,7 +411,7 @@ def get_admin_menu_keyboard():
 
 async def check_user_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
     try:
-        member = await context.bot.get_chat_member(chat_id=_ID, user_id=user_id)
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         if member.status in ["member", "administrator", "creator"]:
             return True
     except Exception as e:
@@ -465,18 +470,19 @@ async def update_user_orders_status(user_id, context, update_obj=None):
                                 except:
                                     pass
 
-                                _proof_msg = (
+                                channel_proof_msg = (
                                     f"⭐ **تم التسليم بنجاح** ⭐\n\n"
                                     f"👑 اسم العميل: {customer_name}\n"
                                     f"💎 الخدمة: {o.get('service_name', 'خدمة سوشيال ميديا')}\n"
                                     f"🔥 العدد: {o.get('qty')}\n"
                                     f"🔢 رقم الطلب: {o_id}\n"
                                     f"✅ الحالة: تم التسليم\n\n"
-                                    f"❤️ شكراً لثقتك بنا - L.G"
+                                    f"❤️ شكراً لثقتك بنا - L.G\n\n"
+                                    f"🤖 رابط البوت: https://t.me/{(await context.bot.get_me()).username}"
                                 )
-                                await context.bot.send_message(chat_id=_ID, text=_proof_msg, parse_mode="Markdown")
-                            except Exception as _err:
-                                print(f"خطأ في إرسال الإثبات للقناة: {_err}")
+                                await context.bot.send_message(chat_id=CHANNEL_ID, text=channel_proof_msg, parse_mode="Markdown")
+                            except Exception as channel_err:
+                                print(f"خطأ في إرسال الإثبات للقناة: {channel_err}")
         except Exception as e:
             print(f"خطأ في فحص حالة الطلب {o_id}: {e}")
 
@@ -485,12 +491,29 @@ async def background_orders_tracker(context: ContextTypes.DEFAULT_TYPE):
         await update_user_orders_status(u_id, context)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user = update.effective_user
+    user_id = user.id
     
     if user_id in banned_users:
         if update.message:
             await update.message.reply_text("❌ عذراً، تم حظرك من استخدام هذا البوت.")
         return
+
+    if str(user_id) not in user_currencies_data:
+        user_lang_code = (user.language_code or "").lower()
+        if "ar-sa" in user_lang_code or user_lang_code == "sa":
+            user_currencies_data[str(user_id)] = "SAR"
+        elif "ar-jo" in user_lang_code or user_lang_code == "jo":
+            user_currencies_data[str(user_id)] = "JOD"
+        elif "ar-eg" in user_lang_code or user_lang_code == "eg":
+            user_currencies_data[str(user_id)] = "EGP"
+        elif "ar-ae" in user_lang_code or user_lang_code == "ae":
+            user_currencies_data[str(user_id)] = "AED"
+        elif user_lang_code.startswith("ar"):
+            user_currencies_data[str(user_id)] = "EGP"
+        else:
+            user_currencies_data[str(user_id)] = "USD"
+        save_user_currencies()
 
     args = context.args
     if args and args[0].startswith("ref_"):
@@ -511,7 +534,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_subscribed = await check_user_subscription(user_id, context)
     if not is_subscribed:
         keyboard = [
-            [InlineKeyboardButton(get_trans(user_id, "sub_btn_"), url=f"https://t.me/{_USERNAME}")],
+            [InlineKeyboardButton(get_trans(user_id, "sub_btn_channel"), url=f"https://t.me/{CHANNEL_USERNAME}")],
             [InlineKeyboardButton(get_trans(user_id, "sub_btn_check"), callback_data="check_sub")]
         ]
         text = get_trans(user_id, "sub_check")
@@ -572,6 +595,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states[user_id] = {"step": "admin_waiting_check_bal"}
             await query.edit_message_text("🔍 أرسل آيدي (ID) المستخدم المراد الاستعلام عن رصيده:", parse_mode="Markdown")
             return
+        elif data == "admin_create_promo":
+            user_states[user_id] = {"step": "admin_waiting_promo_details"}
+            await query.edit_message_text(
+                "🎟 **إنشاء كود هدية برمجياً مع مواعيد صالحة:**\n\n"
+                "أرسل البيانات بالترتيب في رسالة واحدة:\n"
+                "`الكود` `المبلغ` `عدد الاستخدامات` `مدة الصلاحية بالساعات`\n\n"
+                "مثال:\n`FREE50 10 20 24`\n(يعني كود FREE50 بقيمة 10، لـ 20 شخص، لمدة 24 ساعة)",
+                parse_mode="Markdown"
+            )
+            return
         elif data == "admin_broadcast":
             user_states[user_id] = {"step": "admin_waiting_broadcast"}
             await query.edit_message_text("📢 أرسل الآن الرسالة أو الإعلان الذي تريد إذاعته لكل المستخدمين:")
@@ -611,7 +644,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📈 **إحصائيات البوت الشاملة:**\n\n"
                 f"👥 إجمالي المستخدمين: `{total_users}`\n"
                 f"📦 إجمالي الطلبات: `{total_orders_count}`\n"
-                f"💰 إجمالي الأرصدة بالمحافظ: `{total_money_in_wallets:.2f} جنيه`\n"
+                f"💰 إجمالي الأرصدة بالمحافظ: `{total_money_in_wallets:.2f}`\n"
                 f"💵 نسبة الربح المفعلة: `{PROFIT_MARGIN}`"
             )
             await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_menu_back")]]), parse_mode="Markdown")
@@ -772,7 +805,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_balances[target_user_id] += amount
             save_balances()
             
-            new_caption = current_caption + f"\n\n✅ حالة الطلب: تم القبول وإضافة مبلغ ({amount:.2f} جنيه) للمستخدم بنجاح."
+            new_caption = current_caption + f"\n\n✅ حالة الطلب: تم القبول وإضافة مبلغ ({amount:.2f}) للمستخدم بنجاح."
             try:
                 if query.message.photo:
                     await query.edit_message_caption(caption=new_caption, reply_markup=None)
@@ -824,7 +857,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_subscribed = await check_user_subscription(user_id, context)
     if not is_subscribed:
         keyboard = [
-            [InlineKeyboardButton(get_trans(user_id, "sub_btn_"), url=f"https://t.me/{_USERNAME}")],
+            [InlineKeyboardButton(get_trans(user_id, "sub_btn_channel"), url=f"https://t.me/{CHANNEL_USERNAME}")],
             [InlineKeyboardButton(get_trans(user_id, "sub_btn_check"), callback_data="check_sub")]
         ]
         try:
@@ -848,6 +881,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔍 البحث السريع عن الخدمات:\n\nأرسل الآن كلمة مفتاحية للبحث:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+
+        elif data == "promo_code_prompt": # واجهة طلب كود الهدية من المستخدم
+            user_states[user_id] = {"step": "waiting_promo_code"}
+            keyboard = [
+                [InlineKeyboardButton(get_trans(user_id, "exit"), callback_data="exit_action"), InlineKeyboardButton(get_trans(user_id, "back"), callback_data="main_menu")],
+                [InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu"), InlineKeyboardButton(get_trans(user_id, "back_step"), callback_data="main_menu")]
+            ]
+            try:
+                await query.edit_message_text("🎟 **شحن كود هدية:**\n\nأرسل الآن كود الهدية أو القسيمة لإضافته إلى رصيدك:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            except:
+                pass
 
         elif data == "my_account":
             user_states.pop(user_id, None)
@@ -873,6 +917,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [InlineKeyboardButton("📞 شحن عبر فودافون كاش", callback_data="pay_vodafone")],
                 [InlineKeyboardButton("🪙 شحن عبر USDT (TRC-20)", callback_data="pay_usdt")],
+                [InlineKeyboardButton("⚡ شحن تلقائي فوري (قريباً عبر بوابة الدفع)", callback_data="auto_pay_info")], # ميزة الشحن التلقائي المضافه
                 [InlineKeyboardButton(get_trans(user_id, "exit"), callback_data="exit_action"), InlineKeyboardButton(get_trans(user_id, "back"), callback_data="main_menu")],
                 [InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu"), InlineKeyboardButton(get_trans(user_id, "back_step"), callback_data="main_menu")]
             ]
@@ -880,6 +925,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
             except:
                 pass
+
+        elif data == "auto_pay_info":
+            await query.answer("⚡ جاري تفعيل بوابات الدفع التلقائي الفوري بالتعاون مع المزودين قريباً!", show_alert=True)
+            return
 
         elif data == "pay_vodafone":
             user_states[user_id] = {"step": "deposit_waiting_screenshot", "method": "فودافون كاش"}
@@ -1195,6 +1244,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ خطأ في الآيدي المدخل: {e}\nيرجى إرسال أرقام صحيحة فقط.")
             return
 
+        elif step == "admin_waiting_promo_details": # معالجة إنشاء كود الهدية والمواعيد من الأدمن
+            user_states.pop(user_id, None)
+            try:
+                parts = update.message.text.strip().split()
+                code_str = parts[0].upper()
+                amount_val = float(parts[1])
+                max_uses = int(parts[2])
+                hours_valid = int(parts[3])
+                
+                expires_at = time.time() + (hours_valid * 3600)
+                
+                promo_codes_col.update_one(
+                    {"code": code_str},
+                    {
+                        "$set": {
+                            "amount": amount_val,
+                            "max_uses": max_uses,
+                            "used_count": 0,
+                            "expires_at": expires_at,
+                            "used_by": []
+                        }
+                    },
+                    upsert=True
+                )
+                
+                await update.message.reply_text(
+                    f"✅ **تم إنشاء كود الهدية بنجاح!**\n\n"
+                    f"🎟 الكود: `{code_str}`\n"
+                    f"💰 القيمة: `{amount_val}`\n"
+                    f"👥 الحد الأقصى للاستخدام: `{max_uses}`\n"
+                    f"⏳ صلاحية الوقت: `{hours_valid} ساعة`",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطأ في صياغة البيانات:\n{e}\n\nالصيغة الصحيحة: `الكود المبلغ عدد_الاستخدامات ساعات_الصلاحية`")
+            return
+
         elif step == "admin_waiting_broadcast":
             user_states.pop(user_id, None)
             bc_text = update.message.text
@@ -1221,7 +1307,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 new_margin = float(update.message.text.strip())
                 PROFIT_MARGIN = new_margin
                 save_settings(new_margin)
-                load_services() # تحديث أسعار الخدمات فورا بالنسبة الجديدة
+                load_services() 
                 await update.message.reply_text(f"✅ تم تحديث نسبة الربح بنجاح إلى: `{PROFIT_MARGIN}` وتم إعادة تحميل أسعار الخدمات.", parse_mode="Markdown")
             except Exception as e:
                 await update.message.reply_text(f"❌ خطأ في القيمة المدخلة: {e}")
@@ -1270,7 +1356,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state_data = user_states[user_id]
         step = state_data.get("step")
         
-        if step == "deposit_waiting_phone":
+        if step == "waiting_promo_code": # التحقق وتفعيل كود الهدية للمستخدم حسب المواعيد والحدود
+            user_states.pop(user_id, None)
+            entered_code = text.upper()
+            
+            promo_doc = promo_codes_col.find_one({"code": entered_code})
+            if not promo_doc:
+                await update.message.reply_text("❌ عذراً، هذا الكود غير صحيح أو غير موجود.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
+                return
+                
+            current_time = time.time()
+            if current_time > promo_doc.get("expires_at", 0):
+                await update.message.reply_text("❌ عذراً، لقد انتهت صلاحية هذا الكود (انتهى وقت الموعد المحدد).", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
+                return
+                
+            if promo_doc.get("used_count", 0) >= promo_doc.get("max_uses", 0):
+                await update.message.reply_text("❌ عذراً، لقد استنفد هذا الكود الحد الأقصى لعدد الاستخدامات.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
+                return
+                
+            used_by_list = promo_doc.get("used_by", [])
+            if user_id in used_by_list:
+                await update.message.reply_text("⚠️ لقد قمت باستخدام هذا الكود مسبقاً ولا يمكنك استخدامه مرتين.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
+                return
+                
+            promo_amount = float(promo_doc.get("amount", 0))
+            if user_id not in user_balances:
+                user_balances[user_id] = 0.0
+            user_balances[user_id] += promo_amount
+            save_balances()
+            
+            promo_codes_col.update_one(
+                {"code": entered_code},
+                {
+                    "$inc": {"used_count": 1},
+                    "$push": {"used_by": user_id}
+                }
+            )
+            
+            formatted_bal = format_price(user_id, user_balances[user_id])
+            await update.message.reply_text(
+                f"🎉 مبروك! تم شحن الكود بنجاح.\n\n"
+                f"💰 تمت إضافة مبلغ: `{promo_amount}` إلى رصيدك.\n"
+                f"💳 رصيدك الحالي: {formatted_bal}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]),
+                parse_mode="Markdown"
+            )
+            return
+
+        elif step == "deposit_waiting_phone":
             user_states[user_id]["phone"] = text
             user_states[user_id]["step"] = "deposit_waiting_amount"
             await update.message.reply_text("💰 الخطوة 3: أرسل المبلغ الذي تم تحويله:")
@@ -1425,6 +1558,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     save_orders_data()
                     
                     formatted_rem_bal = format_price(user_id, user_balances[user_id])
+                    
                     await update.message.reply_text(f"✅ تم تقديم طلبك بنجاح!\nرقم الطلب: {order_id}\nرصيدك المتبقي: {formatted_rem_bal}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
                 else:
                     await update.message.reply_text(f"❌ فشل التنفيذ: {res.get('error', 'خطأ')}")
@@ -1447,7 +1581,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO & ~filters.COMMAND, handle_message))
     
-    print("البوت يعمل الآن ومتصل بقاعدة بيانات MongoDB بنجاح مع كافة مميزات الأدمن...")
+    print("البوت يعمل الآن ومتصل بقاعدة بيانات MongoDB بنجاح مع المميزات الجديدة وكافة الأساسيات...")
     app.run_polling()
 
 if __name__ == "__main__":
