@@ -13,8 +13,8 @@ ADMIN_ID = 8661031937
 CHANNEL_ID = -1004333526788
 CHANNEL_USERNAME = "Jsoxkedoaoejfh"
 SUPPORT_USERNAME = "Hdiwjfk65BT"
-SMM_API_URL = "https://igcpanel.com/api/v2"
-SMM_API_KEY = "6504235efb8beac5fad5a21ab646356f"
+SMM_API_URL = "https://smmxsocial.com/api/v2"
+SMM_API_KEY = "bb0e2136a9676606079a027aeb10ea5c"
 
 MONGO_URI = "mongodb://ahmed462920mohamed_db_user:9YNC0fcUy02liEdV@ac-h69by4r-shard-00-00.ksgqrjd.mongodb.net:27017,ac-h69by4r-shard-00-01.ksgqrjd.mongodb.net:27017,ac-h69by4r-shard-00-02.ksgqrjd.mongodb.net:27017/?ssl=true&replicaSet=atlas-adx6rj-shard-0&authSource=admin&appName=Cluster0"
 mongo_client = MongoClient(MONGO_URI)
@@ -28,7 +28,8 @@ currencies_col = db["user_currencies"]
 langs_col = db["user_langs"]
 banned_col = db["user_banned"]
 settings_col = db["bot_settings"]
-promo_codes_col = db["promo_codes"] # مجموعة جديدة لأكواد الهدايا
+promo_codes_col = db["promo_codes"]
+daily_gifts_col = db["daily_gifts_claims"]
 
 VODAFONE_WALLET = "01018729516"
 WALLET_NAME = "AHMED"
@@ -51,6 +52,7 @@ LANGS = {
         "btn_orders": "📦 طلباتي السابقة وحالتها",
         "btn_payment": "💳 طرق وشحن الرصيد",
         "btn_promo": "🎟 شحن كود هدية",
+        "btn_daily_gift": "🎁 الهدية اليومية المجانية",
         "btn_account": "👤 حسابي",
         "btn_currency": "💱 تغيير العملة واللغة",
         "btn_support": "💬 تواصل مع الدعم",
@@ -77,6 +79,7 @@ LANGS = {
         "btn_orders": "📦 My Orders & Status",
         "btn_payment": "💳 Balance & Payment Methods",
         "btn_promo": "🎟 Redeem Promo Code",
+        "btn_daily_gift": "🎁 Free Daily Gift",
         "btn_account": "👤 My Account",
         "btn_currency": "💱 Currency & Language",
         "btn_support": "💬 Contact Support",
@@ -99,7 +102,7 @@ LANGS = {
 
 logging.basicConfig(level=logging.INFO)
 cached_subcategories = {} 
-daily_gift_items = [] 
+daily_gift_cache = {"service": None, "day": ""}
 user_states = {}    
 
 def load_settings():
@@ -333,7 +336,7 @@ def classify_service_type(s_name, cat_name, platform=""):
     return "خدمات أخري"
 
 def load_services():
-    global cached_subcategories, daily_gift_items
+    global cached_subcategories, daily_gift_cache
     try:
         response = requests.post(SMM_API_URL, data={"key": SMM_API_KEY, "action": "services"}, timeout=15)
         if response.status_code == 200:
@@ -368,19 +371,23 @@ def load_services():
                 if real_platform in temp_sub and p_type:
                     temp_sub[real_platform][p_type].append(s)
 
-                all_valid_services.append((s, real_platform))
+                all_valid_services.append(s)
             
             cleaned_sub = {}
             for p in temp_sub:
                 cleaned_sub[p] = {sub_k: items for sub_k, items in temp_sub[p].items() if len(items) > 0}
             cached_subcategories = cleaned_sub
 
-            selected_gifts = []
             if all_valid_services:
-                random.shuffle(all_valid_services)
-                selected_gifts = all_valid_services[:2]
-            
-            daily_gift_items = selected_gifts
+                current_date_str = time.strftime("%Y-%m-%d")
+                if daily_gift_cache["day"] != current_date_str or not daily_gift_cache["service"]:
+                    sorted_by_price = sorted(all_valid_services, key=lambda x: float(x.get("client_rate", 0)))
+                    if sorted_by_price:
+                        cheapest_srv = sorted_by_price[0].copy()
+                        cheapest_srv["min"] = 10
+                        cheapest_srv["max"] = 10
+                        daily_gift_cache["service"] = cheapest_srv
+                        daily_gift_cache["day"] = current_date_str
 
     except Exception as e:
         print(f"خطأ في تحميل الخدمات: {e}")
@@ -388,11 +395,12 @@ def load_services():
 def get_main_menu_keyboard(user_id=None):
     return [
         [InlineKeyboardButton(get_trans(user_id, "btn_services"), callback_data="show_categories")],
+        [InlineKeyboardButton(get_trans(user_id, "btn_daily_gift"), callback_data="daily_gift_menu")], 
         [InlineKeyboardButton(get_trans(user_id, "btn_search"), callback_data="search_service_prompt")],
         [InlineKeyboardButton(get_trans(user_id, "btn_favs"), callback_data="my_favorites")],
         [InlineKeyboardButton(get_trans(user_id, "btn_orders"), callback_data="my_orders")],
         [InlineKeyboardButton(get_trans(user_id, "btn_payment"), callback_data="payment_methods")],
-        [InlineKeyboardButton(get_trans(user_id, "btn_promo"), callback_data="promo_code_prompt")], # زر جديد لأكواد الهدايا
+        [InlineKeyboardButton(get_trans(user_id, "btn_promo"), callback_data="promo_code_prompt")],
         [InlineKeyboardButton(get_trans(user_id, "btn_account"), callback_data="my_account")],
         [InlineKeyboardButton(get_trans(user_id, "btn_currency"), callback_data="currency_menu")],
         [InlineKeyboardButton(get_trans(user_id, "btn_support"), url=f"https://t.me/{SUPPORT_USERNAME}")]
@@ -402,7 +410,7 @@ def get_admin_menu_keyboard():
     return [
         [InlineKeyboardButton("💰 إضافة رصيد لمستخدم", callback_data="admin_add_balance"), InlineKeyboardButton("➖ خصم رصيد من مستخدم", callback_data="admin_sub_balance")],
         [InlineKeyboardButton("🔍 الاستعلام عن رصيد مستخدم", callback_data="admin_check_balance")],
-        [InlineKeyboardButton("🎟 إنشاء كود هدية جديد", callback_data="admin_create_promo")], # زر أدمن جديد للكود والمواعيد
+        [InlineKeyboardButton("🎟 إنشاء كود هدية جديد", callback_data="admin_create_promo")],
         [InlineKeyboardButton("📢 إذاعة رسالة للجميع", callback_data="admin_broadcast"), InlineKeyboardButton("💵 تعديل نسبة الربح", callback_data="admin_set_profit")],
         [InlineKeyboardButton("🚫 حظر مستخدم", callback_data="admin_ban"), InlineKeyboardButton("🟢 إلغاء حظر مستخدم", callback_data="admin_unban")],
         [InlineKeyboardButton("📊 رصيد موقع SMM الأساسي", callback_data="admin_smm_balance"), InlineKeyboardButton("📈 إحصائيات البوت والمالية", callback_data="admin_stats")],
@@ -562,18 +570,18 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     data = query.data
     user_id = update.effective_user.id
 
     if user_id in banned_users and user_id != ADMIN_ID:
         try:
-            await query.edit_message_text("❌ تم حظرك من استخدام البوت.")
+            await query.answer("❌ تم حظرك من استخدام البوت.", show_alert=True)
         except:
             pass
         return
 
     if data == "exit_action":
+        await query.answer()
         user_states.pop(user_id, None)
         try:
             await query.message.delete()
@@ -581,21 +589,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("تم إغلاق القائمة.")
         return
 
-    # Admin Panel Actions
     if user_id == ADMIN_ID:
         if data == "admin_add_balance":
+            await query.answer()
             user_states[user_id] = {"step": "admin_waiting_add_bal"}
             await query.edit_message_text("💰 أرسل (آيدي المستخدم) و(المبلغ) المراد إضافته بهطول:\nمثال: `123456789 50`", parse_mode="Markdown")
             return
         elif data == "admin_sub_balance":
+            await query.answer()
             user_states[user_id] = {"step": "admin_waiting_sub_bal"}
             await query.edit_message_text("➖ أرسل (آيدي المستخدم) و(المبلغ) المراد خصمه بهطول:\nمثال: `123456789 20`", parse_mode="Markdown")
             return
         elif data == "admin_check_balance":
+            await query.answer()
             user_states[user_id] = {"step": "admin_waiting_check_bal"}
             await query.edit_message_text("🔍 أرسل آيدي (ID) المستخدم المراد الاستعلام عن رصيده:", parse_mode="Markdown")
             return
         elif data == "admin_create_promo":
+            await query.answer()
             user_states[user_id] = {"step": "admin_waiting_promo_details"}
             await query.edit_message_text(
                 "🎟 **إنشاء كود هدية برمجياً مع مواعيد صالحة:**\n\n"
@@ -606,22 +617,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         elif data == "admin_broadcast":
+            await query.answer()
             user_states[user_id] = {"step": "admin_waiting_broadcast"}
             await query.edit_message_text("📢 أرسل الآن الرسالة أو الإعلان الذي تريد إذاعته لكل المستخدمين:")
             return
         elif data == "admin_set_profit":
+            await query.answer()
             user_states[user_id] = {"step": "admin_waiting_profit"}
             await query.edit_message_text(f"💵 نسبة الربح الحالية هي: `{PROFIT_MARGIN}`\n\nأرسل النسبة الجديدة (مثال: `1.35` أو `1.4`):", parse_mode="Markdown")
             return
         elif data == "admin_ban":
+            await query.answer()
             user_states[user_id] = {"step": "admin_waiting_ban"}
             await query.edit_message_text("🚫 أرسل آيدي المستخدم المراد حظره:")
             return
         elif data == "admin_unban":
+            await query.answer()
             user_states[user_id] = {"step": "admin_waiting_unban"}
             await query.edit_message_text("🟢 أرسل آيدي المستخدم المراد إلغاء حظره:")
             return
         elif data == "admin_smm_balance":
+            await query.answer()
             try:
                 res = requests.post(SMM_API_URL, data={"key": SMM_API_KEY, "action": "balance"}, timeout=10).json()
                 bal_val = res.get("balance", "غير معروف")
@@ -633,6 +649,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text_smm, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_menu_back")]]), parse_mode="Markdown")
             return
         elif data == "admin_stats":
+            await query.answer()
             total_users = balances_col.count_documents({})
             total_orders_count = 0
             for uid, ords in user_orders.items():
@@ -650,11 +667,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_menu_back")]]), parse_mode="Markdown")
             return
         elif data == "admin_menu_back":
+            await query.answer()
             user_states.pop(user_id, None)
             await query.edit_message_text("🛠 لوحة تحكم الأدمن:", reply_markup=InlineKeyboardMarkup(get_admin_menu_keyboard()))
             return
 
     if data == "currency_menu":
+        await query.answer()
         user_states.pop(user_id, None)
         keyboard = []
         for code, info in CURRENCIES.items():
@@ -672,6 +691,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("set_curr_"):
+        await query.answer()
         chosen_curr = data.replace("set_curr_", "")
         if chosen_curr in CURRENCIES:
             user_currencies_data[str(user_id)] = chosen_curr
@@ -684,6 +704,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("set_lang_"):
+        await query.answer()
         chosen_lang = data.replace("set_lang_", "")
         if chosen_lang in ["ar", "en"]:
             user_langs_data[str(user_id)] = chosen_lang
@@ -692,6 +713,52 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(get_trans(user_id, "choose_lang_done"), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
             except:
                 pass
+        return
+
+    if data == "daily_gift_menu":
+        if not daily_gift_cache.get("service"):
+            load_services()
+        
+        gift_srv = daily_gift_cache.get("service")
+        if not gift_srv:
+            await query.answer("❌ عذراً، الهدية اليومية غير متوفرة حالياً.", show_alert=True)
+            return
+
+        claim_doc = daily_gifts_col.find_one({"user_id": user_id})
+        now_time = time.time()
+        if claim_doc and (now_time - claim_doc.get("last_claimed", 0) < 86400):
+            remaining_time = int(86400 - (now_time - claim_doc.get("last_claimed", 0)))
+            hours_rem = remaining_time // 3600
+            mins_rem = (remaining_time % 3600) // 60
+            await query.answer(f"⏳ لقد حصلت على الهدية اليومية بالفعل!\nيمكنك الاستلام مرة أخرى بعد: {hours_rem} ساعة و {mins_rem} دقيقة.", show_alert=True)
+            return
+
+        await query.answer()
+        user_states.pop(user_id, None)
+        
+        s_id = gift_srv.get("service")
+        s_name = gift_srv.get("name")
+        rate = 0.0 
+        formatted_rate = format_price(user_id, rate)
+        
+        user_states[user_id] = {"step": "waiting_daily_gift_link", "service_id": s_id}
+        
+        text = (
+            f"🎁 **الهدية اليومية المجانية** 🎁\n\n"
+            f"📌 اسم الخدمة: {s_name}\n"
+            f"📊 الكمية المتاحة: 10 (ثابتة)\n"
+            f"💰 السعر: مجاناً 100% ({formatted_rate})\n\n"
+            f"⚠️ ملاحظة: يمكنك الحصول على الهدية مرة واحدة كل 24 ساعة.\n\n"
+            f"🔗 أرسل الآن الرابط المطلوب لتنفيذ هدتك:"
+        )
+        keyboard = [
+            [InlineKeyboardButton(get_trans(user_id, "exit"), callback_data="exit_action"), InlineKeyboardButton(get_trans(user_id, "back"), callback_data="main_menu")],
+            [InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu"), InlineKeyboardButton(get_trans(user_id, "back_step"), callback_data="main_menu")]
+        ]
+        try:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        except:
+            pass
         return
 
     if data.startswith("reorder_"):
@@ -792,6 +859,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ هذا الزر للمشرف فقط!", show_alert=True)
             return
         
+        await query.answer()
         parts = data.split("__")
         action = parts[0]
         target_user_id = int(parts[1])
@@ -843,6 +911,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "check_sub":
         is_subscribed = await check_user_subscription(user_id, context)
         if is_subscribed:
+            await query.answer()
             if user_id not in user_balances:
                 user_balances[user_id] = 300.0 if user_id == ADMIN_ID else 0.0
                 save_balances()
@@ -861,6 +930,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(get_trans(user_id, "sub_btn_check"), callback_data="check_sub")]
         ]
         try:
+            await query.answer()
             await query.edit_message_text(get_trans(user_id, "sub_check"), reply_markup=InlineKeyboardMarkup(keyboard))
         except:
             pass
@@ -872,6 +942,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if data == "search_service_prompt":
+            await query.answer()
             user_states[user_id] = {"step": "waiting_search_query"}
             keyboard = [
                 [InlineKeyboardButton(get_trans(user_id, "exit"), callback_data="exit_action"), InlineKeyboardButton(get_trans(user_id, "back"), callback_data="main_menu")],
@@ -882,7 +953,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
-        elif data == "promo_code_prompt": # واجهة طلب كود الهدية من المستخدم
+        elif data == "promo_code_prompt":
+            await query.answer()
             user_states[user_id] = {"step": "waiting_promo_code"}
             keyboard = [
                 [InlineKeyboardButton(get_trans(user_id, "exit"), callback_data="exit_action"), InlineKeyboardButton(get_trans(user_id, "back"), callback_data="main_menu")],
@@ -894,6 +966,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data == "my_account":
+            await query.answer()
             user_states.pop(user_id, None)
             bal = user_balances.get(user_id, 0.0)
             formatted_bal = format_price(user_id, bal)
@@ -912,12 +985,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data == "payment_methods":
+            await query.answer()
             user_states.pop(user_id, None)
             text = "💳 اختر طريقة الشحن المناسبة لك:"
             keyboard = [
                 [InlineKeyboardButton("📞 شحن عبر فودافون كاش", callback_data="pay_vodafone")],
                 [InlineKeyboardButton("🪙 شحن عبر USDT (TRC-20)", callback_data="pay_usdt")],
-                [InlineKeyboardButton("⚡ شحن تلقائي فوري (قريباً عبر بوابة الدفع)", callback_data="auto_pay_info")], # ميزة الشحن التلقائي المضافه
+                [InlineKeyboardButton("⚡ شحن تلقائي فوري (قريباً عبر بوابة الدفع)", callback_data="auto_pay_info")],
                 [InlineKeyboardButton(get_trans(user_id, "exit"), callback_data="exit_action"), InlineKeyboardButton(get_trans(user_id, "back"), callback_data="main_menu")],
                 [InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu"), InlineKeyboardButton(get_trans(user_id, "back_step"), callback_data="main_menu")]
             ]
@@ -931,6 +1005,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif data == "pay_vodafone":
+            await query.answer()
             user_states[user_id] = {"step": "deposit_waiting_screenshot", "method": "فودافون كاش"}
             text = f"📞 تحويل على رقم: {VODAFONE_WALLET}\nاسم الحساب: {WALLET_NAME}\n\n📸 أرسل صورة الإيصال (اسكرين شوت):"
             keyboard = [
@@ -943,6 +1018,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data == "pay_usdt":
+            await query.answer()
             user_states[user_id] = {"step": "deposit_waiting_screenshot", "method": "USDT (TRC20)"}
             text = f"🪙 عنوان المحفظة:\n{USDT_TRC20_WALLET}\n\n📸 أرسل صورة الإيصال (اسكرين شوت):"
             keyboard = [
@@ -955,6 +1031,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data == "my_favorites":
+            await query.answer()
             user_states.pop(user_id, None)
             favs = user_favorites.get(user_id, [])
             if not favs:
@@ -990,6 +1067,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data == "my_orders":
+            await query.answer()
             user_states.pop(user_id, None)
             await update_user_orders_status(user_id, context)
             
@@ -1034,6 +1112,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data == "show_categories":
+            await query.answer()
             user_states.pop(user_id, None)
             if not cached_subcategories: 
                 load_services()
@@ -1055,6 +1134,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data.startswith("platform_"):
+            await query.answer()
             platform_name = data.replace("platform_", "")
             sub_dict = cached_subcategories.get(platform_name, {})
             
@@ -1074,6 +1154,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data.startswith("subcat_"):
+            await query.answer()
             parts = data.split("__")
             platform_name = parts[0].replace("subcat_", "")
             sub_cat_name = parts[1]
@@ -1116,6 +1197,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data.startswith("srv_"):
+            await query.answer()
             s_id = data.replace("srv_", "")
             selected_service = None
             back_target = "show_categories"
@@ -1161,6 +1243,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data == "main_menu":
+            await query.answer()
             user_states.pop(user_id, None)
             try:
                 await query.edit_message_text(
@@ -1244,7 +1327,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ خطأ في الآيدي المدخل: {e}\nيرجى إرسال أرقام صحيحة فقط.")
             return
 
-        elif step == "admin_waiting_promo_details": # معالجة إنشاء كود الهدية والمواعيد من الأدمن
+        elif step == "admin_waiting_promo_details":
             user_states.pop(user_id, None)
             try:
                 parts = update.message.text.strip().split()
@@ -1356,7 +1439,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state_data = user_states[user_id]
         step = state_data.get("step")
         
-        if step == "waiting_promo_code": # التحقق وتفعيل كود الهدية للمستخدم حسب المواعيد والحدود
+        if step == "waiting_promo_code":
             user_states.pop(user_id, None)
             entered_code = text.upper()
             
@@ -1401,6 +1484,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]),
                 parse_mode="Markdown"
             )
+            return
+
+        elif step == "waiting_daily_gift_link":
+            user_states.pop(user_id, None)
+            s_id = state_data.get("service_id")
+            link = text
+            qty = 10 
+
+            gift_srv = daily_gift_cache.get("service")
+            if not gift_srv or str(gift_srv.get("service")) != str(s_id):
+                await update.message.reply_text("❌ عذراً، انتهت صلاحية الهدية أو حدث خطأ، أعد المحاولة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
+                return
+
+            payload = {"key": SMM_API_KEY, "action": "add", "service": s_id, "link": link, "quantity": qty}
+            try:
+                res = requests.post(SMM_API_URL, data=payload, timeout=15).json()
+                if "order" in res:
+                    order_id = res["order"]
+                    
+                    daily_gifts_col.update_one(
+                        {"user_id": user_id},
+                        {"$set": {"last_claimed": time.time()}},
+                        upsert=True
+                    )
+
+                    if user_id not in user_orders: user_orders[user_id] = []
+                    user_orders[user_id].append({
+                        "order_id": order_id, 
+                        "service_name": f"[هدية يومية] {gift_srv.get('name')}", 
+                        "qty": qty, 
+                        "link": link,
+                        "total_cost": 0.0,
+                        "status": "قيد التنفيذ 🔄",
+                        "notified": False
+                    })
+                    save_orders_data()
+                    
+                    await update.message.reply_text(
+                        f"🎁 **تم إرسال هدكتك اليومية بنجاح!**\n\n"
+                        f"🔢 رقم الطلب: `{order_id}`\n"
+                        f"📊 الكمية: `{qty}`\n"
+                        f"🔗 الرابط: `{link}`\n"
+                        f"✅ مبروك! يمكنك استلام هدية جديدة بعد 24 ساعة.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]),
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await update.message.reply_text(f"❌ فشل التنفيذ من المزود: {res.get('error', 'خطأ')}")
+            except Exception as e:
+                await update.message.reply_text("❌ خطأ في الاتصال بسيرفر الخدمات.")
             return
 
         elif step == "deposit_waiting_phone":
@@ -1581,7 +1714,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO & ~filters.COMMAND, handle_message))
     
-    print("البوت يعمل الآن ومتصل بقاعدة بيانات MongoDB بنجاح مع المميزات الجديدة وكافة الأساسيات...")
+    print("البوت يعمل الآن ومتصل بقاعدة بيانات MongoDB بنجاح مع إضافة الهدية اليومية...")
     app.run_polling()
 
 if __name__ == "__main__":
