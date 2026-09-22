@@ -53,6 +53,7 @@ LANGS = {
         "btn_orders": "📦 طلباتي السابقة وحالتها",
         "btn_payment": "💳 طرق وشحن الرصيد",
         "btn_promo": "🎟 شحن كود هدية",
+        "btn_daily_gift": "🎁 الهدية اليومية المجانية",
         "btn_account": "👤 حسابي",
         "btn_currency": "💱 تغيير العملة واللغة",
         "btn_support": "💬 تواصل مع الدعم",
@@ -79,6 +80,7 @@ LANGS = {
         "btn_orders": "📦 My Orders & Status",
         "btn_payment": "💳 Balance & Payment Methods",
         "btn_promo": "🎟 Redeem Promo Code",
+        "btn_daily_gift": "🎁 Free Daily Gift",
         "btn_account": "👤 My Account",
         "btn_currency": "💱 Currency & Language",
         "btn_support": "💬 Contact Support",
@@ -390,12 +392,57 @@ async def load_services():
 
             cached_subcategories = cleaned_sub
 
+            if all_valid_services:
+                current_date_str = time.strftime("%Y-%m-%d")
+                if daily_gift_cache["day"] != current_date_str or not daily_gift_cache["services"]:
+                    services_by_platform = {}
+                    for s_item in all_valid_services:
+                        cat = s_item.get("category", "")
+                        s_name = s_item.get("name", "")
+                        plt = detect_service_platform(s_name, cat)
+                        if plt not in services_by_platform:
+                            services_by_platform[plt] = []
+                        services_by_platform[plt].append(s_item)
+
+                    available_platforms = [plt for plt, s_list in services_by_platform.items() if len(s_list) > 0]
+                    chosen_two = []
+                    
+                    if len(available_platforms) >= 2:
+                        sampled_platforms = random.sample(available_platforms, 2)
+                        for plt in sampled_platforms:
+                            chosen_two.append(random.choice(services_by_platform[plt]))
+                    elif len(available_platforms) == 1:
+                        s_list = services_by_platform[available_platforms[0]]
+                        if len(s_list) >= 2:
+                            chosen_two = random.sample(s_list, 2)
+                        elif len(s_list) == 1:
+                            chosen_two = [s_list[0], s_list[0]]
+                    else:
+                        if len(all_valid_services) >= 2:
+                            chosen_two = random.sample(all_valid_services, 2)
+                        elif len(all_valid_services) == 1:
+                            chosen_two = [all_valid_services[0], all_valid_services[0]]
+                        else:
+                            chosen_two = []
+                    
+                    gift_services_list = []
+                    for s_item in chosen_two:
+                        srv_copy = s_item.copy()
+                        srv_copy["min"] = 10
+                        srv_copy["max"] = 10
+                        srv_copy["client_rate"] = 0.0  
+                        gift_services_list.append(srv_copy)
+
+                    daily_gift_cache["services"] = gift_services_list
+                    daily_gift_cache["day"] = current_date_str
+
     except Exception as e:
         print(f"خطأ في تحميل الخدمات: {e}")
 
 def get_main_menu_keyboard(user_id=None):
     return [
         [InlineKeyboardButton(get_trans(user_id, "btn_services"), callback_data="show_categories")],
+        [InlineKeyboardButton(get_trans(user_id, "btn_daily_gift"), callback_data="daily_gift_menu")], 
         [InlineKeyboardButton(get_trans(user_id, "btn_search"), callback_data="search_service_prompt")],
         [InlineKeyboardButton(get_trans(user_id, "btn_favs"), callback_data="my_favorites")],
         [InlineKeyboardButton(get_trans(user_id, "btn_orders"), callback_data="my_orders")],
@@ -903,6 +950,47 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if attempt == 2:
                         pass
                     await asyncio.sleep(2)
+        return
+
+    if data == "daily_gift_menu":
+        claim_doc = daily_gifts_col.find_one({"user_id": user_id})
+        now_time = time.time()
+        if claim_doc and (now_time - claim_doc.get("last_claimed", 0) < 86400):
+            remaining_time = int(86400 - (now_time - claim_doc.get("last_claimed", 0)))
+            hours_rem = remaining_time // 3600
+            mins_rem = (remaining_time % 3600) // 60
+            await query.answer(f"⏳ لقد حصلت على الهدية اليومية بالفعل!\nيمكنك الاستلام مرة أخرى بعد: {hours_rem} ساعة و {mins_rem} دقيقة.", show_alert=True)
+            return
+
+        if user_id not in user_balances:
+            user_balances[user_id] = 0.0
+        user_balances[user_id] += 0.10
+        save_balances()
+
+        daily_gifts_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"last_claimed": time.time()}},
+            upsert=True
+        )
+
+        formatted_bal = format_price(user_id, user_balances[user_id])
+        await query.answer("🎁 مبروك!", show_alert=True)
+        
+        text = (
+            "🎁 *تم استلام الهدية اليومية بنجاح!*\n\n"
+            f"💳 رصيدك الحالي: {formatted_bal}"
+        )
+        keyboard = [
+            [InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]
+        ]
+        for attempt in range(3):
+            try:
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+                break
+            except Exception:
+                if attempt == 2:
+                    pass
+                await asyncio.sleep(2)
         return
 
     if data.startswith("reorder_"):
@@ -2074,6 +2162,83 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await asyncio.sleep(2)
             return
 
+        elif step == "waiting_daily_gift_link":
+            user_states.pop(user_id, None)
+            s_id = state_data.get("service_id")
+            link = text
+            qty = 10 
+
+            gift_services = daily_gift_cache.get("services", [])
+            selected_gift_srv = None
+            for srv_item in gift_services:
+                if str(srv_item.get("service")) == str(s_id):
+                    selected_gift_srv = srv_item
+                    break
+
+            if not selected_gift_srv:
+                for attempt in range(3):
+                    try:
+                        await update.message.reply_text("❌ عذراً، انتهت صلاحية الهدية أو حدث خطأ، أعد المحاولة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            pass
+                        await asyncio.sleep(2)
+                return
+
+            daily_gifts_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"last_claimed": time.time()}},
+                upsert=True
+            )
+
+            temp_order_id = f"temp_gift_{int(time.time())}"
+            if user_id not in user_orders: user_orders[user_id] = []
+            user_orders[user_id].append({
+                "order_id": temp_order_id, 
+                "service_name": f"[هدية يومية] {selected_gift_srv.get('name')}", 
+                "qty": qty, 
+                "link": link,
+                "total_cost": 0.0,
+                "status": "قيد التنفيذ 🔄",
+                "notified": False
+            })
+            save_orders_data()
+            
+            for attempt in range(3):
+                try:
+                    await update.message.reply_text(
+                        f"🎁 **تم إرسال هدكتك اليومية بنجاح!**\n\n"
+                        f"🔢 رقم الطلب (قيد المعالجة): `{temp_order_id}`\n"
+                        f"📊 الكمية: `{qty}`\n"
+                        f"🔗 الرابط: `{link}`\n"
+                        f"✅ مبروك! يمكنك استلام هدية جديدة بعد 24 ساعة.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]),
+                        parse_mode="Markdown"
+                    )
+                    break
+                except Exception:
+                    if attempt == 2:
+                        pass
+                    await asyncio.sleep(2)
+
+            async def send_gift_api_background():
+                try:
+                    payload = {"key": SMM_API_KEY, "action": "add", "service": s_id, "link": link, "quantity": qty}
+                    res = await asyncio.to_thread(lambda: requests.post(SMM_API_URL, data=payload, timeout=15).json())
+                    if "order" in res:
+                        real_order_id = res["order"]
+                        for ord_item in user_orders.get(user_id, []):
+                            if ord_item["order_id"] == temp_order_id:
+                                ord_item["order_id"] = real_order_id
+                                break
+                        save_orders_data()
+                except Exception as bg_e:
+                    print(f"خطأ في إرسال الهدية للخلفية: {bg_e}")
+
+            context.application.create_task(send_gift_api_background())
+            return
+
         elif step == "deposit_waiting_phone":
             if not (text.isdigit() and text.startswith("01") and len(text) == 11):
                 for attempt in range(3):
@@ -2308,44 +2473,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif step == "waiting_link":
-            link = text
+            user_states.pop(user_id, None)
             s_id = state_data.get("service_id")
             qty = state_data.get("qty")
-            total_cost = state_data.get("total_cost", 0)
+            total_cost = state_data.get("total_cost")
             cat_back = state_data.get("cat_back", "show_categories")
-            user_states.pop(user_id, None)
-            
-            current_balance = user_balances.get(user_id, 0.0)
-            if current_balance < total_cost:
-                formatted_bal = format_price(user_id, current_balance)
-                formatted_cost = format_price(user_id, total_cost)
+            link = text
+
+            if user_balances.get(user_id, 0.0) < total_cost:
                 for attempt in range(3):
                     try:
-                        await update.message.reply_text(
-                            f"❌ **رصيدك غير كافٍ لإتمام الطلب!**\n\n"
-                            f"💰 التكلفة المطلوبة: {formatted_cost}\n"
-                            f"💳 رصيدك الحالي: {formatted_bal}\n\n"
-                            f"قم بشحن رصيدك أولاً من قائمة (💳 طرق وشحن الرصيد).",
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton("💳 شحن الرصيد الآن", callback_data="payment_methods")],
-                                [InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]
-                            ]),
-                            parse_mode="Markdown"
-                        )
+                        await update.message.reply_text("❌ رصيدك الحالي غير كافٍ لإتمام هذا الطلب!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
                         break
                     except Exception:
                         if attempt == 2:
                             pass
                         await asyncio.sleep(2)
                 return
-                
-            user_balances[user_id] -= total_cost
-            save_balances()
-            
-            temp_order_id = f"temp_{int(time.time())}"
-            if user_id not in user_orders:
-                user_orders[user_id] = []
-                
+
             selected_service = None
             for cat in cached_subcategories:
                 for sub_c in cached_subcategories[cat]:
@@ -2355,12 +2500,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             break
                     if selected_service: break
                 if selected_service: break
-                
-            service_name = selected_service.get("name") if selected_service else "خدمة سوشيال ميديا"
+
+            if not selected_service:
+                for attempt in range(3):
+                    try:
+                        await update.message.reply_text("❌ عذراً، هذه الخدمة لم تعد متوفرة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            pass
+                        await asyncio.sleep(2)
+                return
+
+            user_balances[user_id] -= total_cost
+            save_balances()
+
+            temp_order_id = f"temp_{int(time.time())}"
+            if user_id not in user_orders:
+                user_orders[user_id] = []
             
             user_orders[user_id].append({
                 "order_id": temp_order_id,
-                "service_name": service_name,
+                "service_name": selected_service.get("name"),
                 "qty": qty,
                 "link": link,
                 "total_cost": round(total_cost, 4),
@@ -2368,17 +2529,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "notified": False
             })
             save_orders_data()
-            
+
             formatted_rem_bal = format_price(user_id, user_balances[user_id])
             for attempt in range(3):
                 try:
                     await update.message.reply_text(
-                        f"✅ **تم تقديم طلبك بنجاح!**\n\n"
+                        f"✅ **تم إرسال طلبك بنجاح!**\n\n"
                         f"🔢 رقم الطلب (قيد المعالجة): `{temp_order_id}`\n"
-                        f"📌 الخدمة: {service_name}\n"
+                        f"📌 الخدمة: {selected_service.get('name')}\n"
                         f"📊 الكمية: {qty}\n"
                         f"🔗 الرابط: {link}\n"
-                        f"💰 التكلفة: {format_price(user_id, total_cost)}\n"
+                        f"💰 التكلفة الإجمالية: {format_price(user_id, total_cost)}\n"
                         f"💳 رصيدك المتبقي: {formatted_rem_bal}",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]),
                         parse_mode="Markdown"
@@ -2389,7 +2550,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                     await asyncio.sleep(2)
 
-            async def send_order_api_background():
+            async def send_order_to_api_background():
                 try:
                     payload = {"key": SMM_API_KEY, "action": "add", "service": s_id, "link": link, "quantity": qty}
                     res = await asyncio.to_thread(lambda: requests.post(SMM_API_URL, data=payload, timeout=15).json())
@@ -2403,20 +2564,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as bg_e:
                     print(f"خطأ في إرسال الطلب للخلفية: {bg_e}")
 
-            context.application.create_task(send_order_api_background())
+            context.application.create_task(send_order_to_api_background())
             return
 
 def main():
     application = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
-    
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
-    
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(load_services())
-    
+
     application.run_polling()
 
 if __name__ == "__main__":
