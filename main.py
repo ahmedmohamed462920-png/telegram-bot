@@ -2479,7 +2479,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_cost = state_data.get("total_cost")
             cat_back = state_data.get("cat_back", "show_categories")
             link = text
-
+            
             if user_balances.get(user_id, 0.0) < total_cost:
                 for attempt in range(3):
                     try:
@@ -2490,7 +2490,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             pass
                         await asyncio.sleep(2)
                 return
-
+                
+            user_balances[user_id] -= total_cost
+            save_balances()
+            
             selected_service = None
             for cat in cached_subcategories:
                 for sub_c in cached_subcategories[cat]:
@@ -2500,28 +2503,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             break
                     if selected_service: break
                 if selected_service: break
-
-            if not selected_service:
-                for attempt in range(3):
-                    try:
-                        await update.message.reply_text("❌ عذراً، هذه الخدمة لم تعد متوفرة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
-                        break
-                    except Exception:
-                        if attempt == 2:
-                            pass
-                        await asyncio.sleep(2)
-                return
-
-            user_balances[user_id] -= total_cost
-            save_balances()
-
+                
+            service_name = selected_service.get("name") if selected_service else "خدمة سوشيال ميديا"
+            
             temp_order_id = f"temp_{int(time.time())}"
             if user_id not in user_orders:
                 user_orders[user_id] = []
-            
+                
             user_orders[user_id].append({
                 "order_id": temp_order_id,
-                "service_name": selected_service.get("name"),
+                "service_name": service_name,
                 "qty": qty,
                 "link": link,
                 "total_cost": round(total_cost, 4),
@@ -2529,14 +2520,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "notified": False
             })
             save_orders_data()
-
+            
             formatted_rem_bal = format_price(user_id, user_balances[user_id])
             for attempt in range(3):
                 try:
                     await update.message.reply_text(
                         f"✅ **تم إرسال طلبك بنجاح!**\n\n"
                         f"🔢 رقم الطلب (قيد المعالجة): `{temp_order_id}`\n"
-                        f"📌 الخدمة: {selected_service.get('name')}\n"
+                        f"📌 الخدمة: {service_name}\n"
                         f"📊 الكمية: {qty}\n"
                         f"🔗 الرابط: {link}\n"
                         f"💰 التكلفة الإجمالية: {format_price(user_id, total_cost)}\n"
@@ -2549,33 +2540,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if attempt == 2:
                         pass
                     await asyncio.sleep(2)
-
-            async def send_order_to_api_background():
+                    
+            async def send_order_to_api():
                 try:
                     payload = {"key": SMM_API_KEY, "action": "add", "service": s_id, "link": link, "quantity": qty}
                     res = await asyncio.to_thread(lambda: requests.post(SMM_API_URL, data=payload, timeout=15).json())
-                    if "order" in res:
+                    if isinstance(res, dict) and "order" in res:
                         real_order_id = res["order"]
                         for ord_item in user_orders.get(user_id, []):
                             if ord_item["order_id"] == temp_order_id:
                                 ord_item["order_id"] = real_order_id
                                 break
                         save_orders_data()
-                except Exception as bg_e:
-                    print(f"خطأ في إرسال الطلب للخلفية: {bg_e}")
-
-            context.application.create_task(send_order_to_api_background())
+                except Exception as api_err:
+                    print(f"خطأ في إرسال الطلب للموقع الخارجي: {api_err}")
+                    
+            context.application.create_task(send_order_to_api())
             return
 
 def main():
     application = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
-
+    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
-
+    application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+    
+    print("🤖 البوت يعمل الآن...")
     application.run_polling()
 
 if __name__ == "__main__":
-    main()
+main()
