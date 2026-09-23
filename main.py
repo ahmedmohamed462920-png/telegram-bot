@@ -2473,27 +2473,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif step == "waiting_link":
-            user_states.pop(user_id, None)
             s_id = state_data.get("service_id")
             qty = state_data.get("qty")
             total_cost = state_data.get("total_cost")
             cat_back = state_data.get("cat_back", "show_categories")
             link = text
+            user_states.pop(user_id, None)
             
-            if user_balances.get(user_id, 0.0) < total_cost:
+            current_bal = user_balances.get(user_id, 0.0)
+            if current_bal < total_cost:
+                formatted_bal = format_price(user_id, current_bal)
+                formatted_cost = format_price(user_id, total_cost)
                 for attempt in range(3):
                     try:
-                        await update.message.reply_text("❌ رصيدك الحالي غير كافٍ لإتمام هذا الطلب!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]))
+                        await update.message.reply_text(
+                            f"❌ رصيدك الحالي غير كافٍ لإتمام هذا الطلب!\n\n"
+                            f"💰 التكلفة الإجمالية: {formatted_cost}\n"
+                            f"💳 رصيدك الحالي: {formatted_bal}\n\n"
+                            f"قم بشحن رصيدك أولاً.",
+                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]])
+                        )
                         break
                     except Exception:
                         if attempt == 2:
                             pass
                         await asyncio.sleep(2)
                 return
-                
-            user_balances[user_id] -= total_cost
+
+            user_balances[user_id] = current_bal - total_cost
             save_balances()
-            
+
             selected_service = None
             for cat in cached_subcategories:
                 for sub_c in cached_subcategories[cat]:
@@ -2503,16 +2512,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             break
                     if selected_service: break
                 if selected_service: break
-                
-            service_name = selected_service.get("name") if selected_service else "خدمة سوشيال ميديا"
-            
+
+            service_name_str = selected_service.get("name") if selected_service else "خدمة سوشيال ميديا"
+
             temp_order_id = f"temp_{int(time.time())}"
             if user_id not in user_orders:
                 user_orders[user_id] = []
-                
+            
             user_orders[user_id].append({
                 "order_id": temp_order_id,
-                "service_name": service_name,
+                "service_name": service_name_str,
                 "qty": qty,
                 "link": link,
                 "total_cost": round(total_cost, 4),
@@ -2520,17 +2529,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "notified": False
             })
             save_orders_data()
-            
+
             formatted_rem_bal = format_price(user_id, user_balances[user_id])
             for attempt in range(3):
                 try:
                     await update.message.reply_text(
-                        f"✅ **تم إرسال طلبك بنجاح!**\n\n"
+                        f"✅ **تم استلام طلبك بنجاح!**\n\n"
                         f"🔢 رقم الطلب (قيد المعالجة): `{temp_order_id}`\n"
-                        f"📌 الخدمة: {service_name}\n"
-                        f"📊 الكمية: {qty}\n"
-                        f"🔗 الرابط: {link}\n"
-                        f"💰 التكلفة الإجمالية: {format_price(user_id, total_cost)}\n"
+                        f"📌 الخدمة: {service_name_str}\n"
+                        f"📊 الكمية: `{qty}`\n"
+                        f"🔗 الرابط: `{link}`\n"
+                        f"💰 التكلفة: {format_price(user_id, total_cost)}\n"
                         f"💳 رصيدك المتبقي: {formatted_rem_bal}",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_trans(user_id, "main_menu_btn"), callback_data="main_menu")]]),
                         parse_mode="Markdown"
@@ -2540,8 +2549,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if attempt == 2:
                         pass
                     await asyncio.sleep(2)
-                    
-            async def send_order_to_api():
+
+            async def send_order_to_api_background():
                 try:
                     payload = {"key": SMM_API_KEY, "action": "add", "service": s_id, "link": link, "quantity": qty}
                     res = await asyncio.to_thread(lambda: requests.post(SMM_API_URL, data=payload, timeout=15).json())
@@ -2552,23 +2561,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 ord_item["order_id"] = real_order_id
                                 break
                         save_orders_data()
-                except Exception as api_err:
-                    print(f"خطأ في إرسال الطلب للموقع الخارجي: {api_err}")
-                    
-            context.application.create_task(send_order_to_api())
+                    else:
+                        error_reason = res.get("error", "خطأ غير معروف من الموقع") if isinstance(res, dict) else "استجابة غير صحيحة"
+                        refund_amount = float(total_cost)
+                        if user_id not in user_balances:
+                            user_balances[user_id] = 0.0
+                        user_balances[user_id] += refund_amount
+                        save_balances()
+
+                        for ord_item in user_orders.get(user_id, []):
+                            if ord_item["order_id"] == temp_order_id:
+                                ord_item["status"] = "ملغي ❌"
+                                break
+                        save_orders_data()
+
+                        for attempt in range(3):
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=user_id,
+                                    text=f"❌ عذراً، فشل تنفيذ الطلب من المزود الأساسي.\nالسبب: {error_reason}\n\nتم إسترداد مبلغ {format_price(user_id, refund_amount)} إلى رصيدك.",
+                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")]])
+                                )
+                                break
+                            except Exception:
+                                if attempt == 2:
+                                    pass
+                                await asyncio.sleep(2)
+                except Exception as api_ex:
+                    print(f"خطأ في إرسال الطلب للخلفية: {api_ex}")
+
+            context.application.create_task(send_order_to_api_background())
             return
 
 def main():
     application = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
-    
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
-    
-    print("🤖 البوت يعمل الآن...")
+    application.add_handler(MessageHandler(filters.PHOTO | filters.TEXT & ~filters.COMMAND, handle_message))
+
     application.run_polling()
 
 if __name__ == "__main__":
     main()
-    
